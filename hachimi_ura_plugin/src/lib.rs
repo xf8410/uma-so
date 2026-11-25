@@ -309,6 +309,103 @@ static mut DECOMPRESS_RESPONSE_ADDR: usize = 0;
 static mut POST_ADDR: usize = 0;
 // UnityWebRequest request-entry observer. Full capture: headers, bodies, tokens and query strings.
 static mut UNITY_SEND_ADDR: usize = 0;
+// ===== matsuri UI 文本（采集 → 中文替换）=====
+static UI_TEXT_SEEN: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+static UI_TEXT_HOOK_ON: AtomicBool = AtomicBool::new(false);
+static mut ORIG_UI_TEXT_PROLOGUE: [u8; 16] = [0; 16];
+/// 日文原文 → 中文（前缀匹配，命中即替换）
+const UI_ZH_MAP: &[(&str, &str)] = &[
+    ("ダーリーアラビアンの教え", "速主 · 均衡型"),
+    ("ゴドルフィンバルブの教え", "智主 · 技能型"),
+    ("バイアリータークの教え", "力主 · 参数型"),
+    ("新おまかせ育成プラン", "自定义育成计划"),
+    ("おまかせ育成", "自动育成"),
+    ("プランを選択してください", "请选择育成计划"),
+    ("バランスよく", "均衡发展"),
+    ("スキルヒントの獲得を", "重视技能提示获取"),
+    ("パラメータの獲得を", "重视属性获取"),
+    ("自由にカスタマイズできる", "可自由自定义"),
+    ("キャンセル", "取消"),
+    ("開始", "开始"),
+    ("編集", "编辑"),
+];
+
+unsafe fn ui_zh_lookup(s: &str) -> Option<&'static str> {
+    for (jp, zh) in UI_ZH_MAP {
+        if s == *jp || s.starts_with(jp) {
+            return Some(*zh);
+        }
+    }
+    None
+}
+
+unsafe fn make_il2cpp_string(s: &str) -> *mut c_void {
+    let p = resolve_il2cpp_symbol("il2cpp_string_new");
+    if p.is_null() {
+        return std::ptr::null_mut();
+    }
+    let f: unsafe extern "C" fn(*const c_char) -> *mut c_void = std::mem::transmute(p);
+    let c = to_cstr(s);
+    f(c.as_ptr())
+}
+
+// ARM64: X0=this(TextCommon), X1=value(Il2CppString*)
+extern "C" fn textcommon_set_text_hook(this: *mut c_void, value: *mut c_void) {
+    unsafe {
+        let mut out = value;
+        if !value.is_null() {
+            let s = read_il2cpp_string(value);
+            if !s.is_empty() {
+                if let Ok(mut v) = UI_TEXT_SEEN.lock() {
+                    if v.len() < 2000 && !v.iter().any(|x| x == &s) {
+                        v.push(s.clone());
+                    }
+                }
+                if let Some(zh) = ui_zh_lookup(&s) {
+                    let ns = make_il2cpp_string(zh);
+                    if !ns.is_null() {
+                        out = ns;
+                    }
+                }
+            }
+        }
+        let tramp = interceptor_get_trampoline(textcommon_set_text_hook as usize);
+        if tramp != 0 {
+            let orig: unsafe extern "C" fn(*mut c_void, *mut c_void) =
+                std::mem::transmute(tramp);
+            orig(this, out);
+        }
+    }
+}
+
+unsafe fn install_ui_text_hook() {
+    if UI_TEXT_HOOK_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    let image = get_image();
+    if image.is_null() {
+        return;
+    }
+    let class = find_class_by_short_name(image, "TextCommon");
+    if class.is_null() {
+        ura_log(3, "UI text hook: TextCommon not found");
+        return;
+    }
+    let addr = find_method_addr(class, "set_text", 1);
+    if addr == 0 {
+        ura_log(3, "UI text hook: set_text not found");
+        return;
+    }
+    if install_hook_safe(
+        "TextCommon.set_text",
+        addr,
+        textcommon_set_text_hook as usize,
+        &mut ORIG_UI_TEXT_PROLOGUE,
+    ) {
+        UI_TEXT_HOOK_ON.store(true, Ordering::Relaxed);
+    }
+}
+
 // MakeMd5 hook
 static mut MAKEMD5_ADDR: usize = 0;
 static mut COMPUTEHASH_ADDR: usize = 0;
@@ -7052,6 +7149,7 @@ fn push_loop() {
                 install_exec_training_hook();
                 install_failure_rate_hook();
                 install_event_choice_hook();
+                install_ui_text_hook();
                 rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
@@ -7829,6 +7927,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/auth/toggle",
             "/api/auth/clear",
             "/api/sniff/unity",
+        "/matsuri/ui_texts",
             "/api/md5log",
             "/api/md5log/clear",
             "/api/md5log/install",
@@ -7946,6 +8045,17 @@ fn handle_http(mut stream: std::net::TcpStream) {
             log_snapshot("data", &result);
         }
         result
+    } else if path == "/matsuri/ui_texts" {
+        let v = UI_TEXT_SEEN
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default();
+        let body = v
+            .iter()
+            .map(|s| format!("\"{}\"", json_escape(s)))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{{\"ok\":true,\"count\":{},\"texts\":[{}]}}", v.len(), body)
     } else if path == "/status" {
         format!(
             r#"{{"game_initialized":{},"http_running":{}}}"#,
