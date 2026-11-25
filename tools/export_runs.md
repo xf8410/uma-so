@@ -36,7 +36,7 @@ resp: {"ok":true,"run_id":"20261125T142530Z-8f3a","bytes":123456,"sha256":"..."}
 
 ## 上传
 优先 `POST /api/github/upload`（SO 内已有 token 通道 `files/uma_github_token.txt`），
-目标 `xf8410/uma-so-private` 的 `data/runs/<YYYY-MM>/<run_id>.json`；失败落本地队列，下次启动重试。
+目标 `xf8410/uma-so` 的 `data/runs/<YYYY-MM>/<run_id>.json`；失败落本地队列，下次启动重试。
 
 ## 蒸馏口径
 `data-distill.yml` 每日把 `data/runs/**` 汇总为 `data/distill/<date>.jsonl`，
