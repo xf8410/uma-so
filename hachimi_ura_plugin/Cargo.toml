@@ -12,6 +12,13 @@ crate-type = ["cdylib"]
 rusqlite = { version = "0.31", default-features = false, features = ["bundled"] }
 ureq = { version = "2", features = ["tls"] }
 libc = "0.2"
+# matsuri 决策栈（CI 里 vendor 到 ../vendor/matsuri，本地不提交）
+matsuri-core = { path = "../vendor/matsuri/crates/matsuri-core", optional = true }
+
+[features]
+default = []
+# 打开后把 matsuri-core 真正编进来（世界模拟 + 运气分 + 手写训练员）
+matsuri = ["dep:matsuri-core"]
 
 [profile.release]
 opt-level = 3
