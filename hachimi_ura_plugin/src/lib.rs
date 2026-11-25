@@ -10381,7 +10381,7 @@ extern "C" fn compress_request_hook_handler(data: *mut c_void) -> *mut c_void {
         let compressed = original(data);
         if !body.is_empty() && POST_ADDR != 0 {
             *PENDING_REQ_BODY.lock().unwrap() = Some(body);
-            PENDING_COMPRESSED.store(compressed as usize, Ordering::Relaxed);
+            PENDING_COMPRESSED.store(compressed as u64, Ordering::Relaxed);
         }
         compressed
     }));
