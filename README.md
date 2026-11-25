@@ -1,6 +1,6 @@
-# uma-so-private
+# uma-so
 
-URA / Hachimi SO 插件的**明文源码唯一真源**与育成数据落库点。
+URA / Hachimi SO 插件的**公开源码唯一真源**与育成数据落库点。
 
 ## 为什么有这个仓
 
