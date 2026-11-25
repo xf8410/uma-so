@@ -22,6 +22,8 @@
 const PLUGIN_VERSION: &str = env!("CARGO_PKG_VERSION");
 mod auth_capture;
 mod rng_consumption_probe;
+mod decisor_async;
+mod matsuri_scorer;
 
 // ★ 端点单一真相源：/health 的 endpoints 与 404 的 available 共用此表，
 //   杜绝三份清单手抄漂移（uma-sniffkit 根因：漏报=骗人）。
