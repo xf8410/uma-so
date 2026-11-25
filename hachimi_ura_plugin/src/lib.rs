@@ -1813,6 +1813,76 @@ unsafe fn read_array_element_details(
 // Based on scenario_id, try multiple possible getter names
 // ============================================================
 
+/// 元数据驱动：从方法表里找「0 参 + 返回类型是 WorkSingleModeScenario*（且非 *DataSet）」的 getter。
+/// 不依赖任何硬编码名字——il2cpp 的 method/return_type 都是明文字段，直接读即可。
+unsafe fn find_scenario_getter_by_metadata(chara_class: *mut c_void) -> Option<String> {
+    type FnGetMethods = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *const c_void;
+    type FnMethodName = unsafe extern "C" fn(*const c_void) -> *const c_char;
+    type FnParamCount = unsafe extern "C" fn(*const c_void) -> u32;
+    type FnRetType = unsafe extern "C" fn(*const c_void) -> *const c_void;
+    type FnClassFromType = unsafe extern "C" fn(*const c_void) -> *mut c_void;
+    type FnClassName = unsafe extern "C" fn(*mut c_void) -> *const c_char;
+
+    let p_methods = resolve_il2cpp_symbol("il2cpp_class_get_methods");
+    let p_name = resolve_il2cpp_symbol("il2cpp_method_get_name");
+    let p_pcount = resolve_il2cpp_symbol("il2cpp_method_get_param_count");
+    let p_rtype = resolve_il2cpp_symbol("il2cpp_method_get_return_type");
+    let p_cft = resolve_il2cpp_symbol("il2cpp_class_from_type");
+    let p_cname = resolve_il2cpp_symbol("il2cpp_class_get_name");
+    if p_methods.is_null() || p_name.is_null() || p_rtype.is_null()
+        || p_cft.is_null() || p_cname.is_null() {
+        return None;
+    }
+    let get_methods: FnGetMethods = std::mem::transmute(p_methods);
+    let get_name: FnMethodName = std::mem::transmute(p_name);
+    let get_pcount: Option<FnParamCount> = if p_pcount.is_null() {
+        None
+    } else {
+        Some(std::mem::transmute(p_pcount))
+    };
+    let get_rtype: FnRetType = std::mem::transmute(p_rtype);
+    let class_from_type: FnClassFromType = std::mem::transmute(p_cft);
+    let get_class_name: FnClassName = std::mem::transmute(p_cname);
+
+    let mut iter: *mut c_void = ptr::null_mut();
+    loop {
+        let m = get_methods(chara_class, &mut iter);
+        if m.is_null() {
+            break;
+        }
+        let name_ptr = get_name(m);
+        if name_ptr.is_null() {
+            continue;
+        }
+        let name = std::ffi::CStr::from_ptr(name_ptr).to_string_lossy().into_owned();
+        if !name.starts_with("get_") {
+            continue;
+        }
+        if let Some(pc) = get_pcount {
+            if pc != 0 {
+                continue;
+            }
+        }
+        let rtype = get_rtype(m);
+        if rtype.is_null() {
+            continue;
+        }
+        let rclass = class_from_type(rtype);
+        if rclass.is_null() {
+            continue;
+        }
+        let cname_ptr = get_class_name(rclass);
+        if cname_ptr.is_null() {
+            continue;
+        }
+        let cname = std::ffi::CStr::from_ptr(cname_ptr).to_string_lossy();
+        if cname.starts_with("WorkSingleModeScenario") && !cname.contains("DataSet") {
+            return Some(name);
+        }
+    }
+    None
+}
+
 unsafe fn try_get_scenario_obj(
     chara_class: *mut c_void,
     chara_obj: *const c_void,
@@ -1820,6 +1890,21 @@ unsafe fn try_get_scenario_obj(
 ) -> *mut c_void {
     if chara_class.is_null() || chara_obj.is_null() {
         return ptr::null_mut();
+    }
+
+    // ★ 先按元数据找（明文字段，不猜名字）
+    if let Some(found) = find_scenario_getter_by_metadata(chara_class) {
+        let obj = call_getter_ref(chara_class, chara_obj, &found);
+        if !obj.is_null() {
+            ura_log(
+                3,
+                &format!(
+                    "★ Scenario {} getter '{}' resolved via il2cpp metadata",
+                    scenario_id, found
+                ),
+            );
+            return obj;
+        }
     }
 
     // Map scenario_id to possible getter names
@@ -12729,6 +12814,7 @@ unsafe fn debug_params_inc_dec() -> String {
         12 => "WorkSingleModeScenarioOnsen",
         13 => "WorkSingleModeScenarioBreeders",
         14 => "WorkSingleModeScenarioRamen",
+        15 => "WorkSingleModeScenarioFesta",
         _ => return format!(r#"{{"error":"unknown_scenario","id":{}}}"#, scenario_id),
     };
     let scenario_class = find_class_by_short_name(image, scenario_class_name);
