@@ -28,17 +28,17 @@ jobs:
         working-directory: hachimi_ura_plugin
         run: |
           set +e
-          cargo build --release --target aarch64-linux-android > /tmp/build.log 2>&1
+          cargo build --release --color never --target aarch64-linux-android > /tmp/build.log 2>&1
           RC=$?
-          echo "cargo exit=$RC  log_lines=$(wc -l < /tmp/build.log)"
+          echo "cargo exit=$RC log_lines=$(wc -l < /tmp/build.log)"
           if [ $RC -ne 0 ]; then
-            echo "===== ERRORS ====="
-            grep -n "^error" /tmp/build.log | head -10
-            echo "===== FIRST ERROR CONTEXT ====="
-            LN=$(grep -n "^error" /tmp/build.log | head -1 | cut -d: -f1)
-            awk -v s="$LN" 'NR>=s-2 && NR<=s+16' /tmp/build.log
-            echo "===== LAST 20 ====="
-            tail -20 /tmp/build.log
+            LN=$(grep -nE "^error(\[|:)" /tmp/build.log | head -1 | cut -d: -f1)
+            echo "first_error_line=${LN:-none}"
+            if [ -n "$LN" ]; then
+              awk -v s="$LN" 'NR>=s-2 && NR<=s+22' /tmp/build.log
+            else
+              tail -30 /tmp/build.log
+            fi
             exit 1
           fi
           ls -la target/aarch64-linux-android/release/libhachimi_ura.so
