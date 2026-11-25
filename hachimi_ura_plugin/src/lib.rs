@@ -1942,6 +1942,7 @@ unsafe fn read_scenario_detail() -> String {
         12 => "WorkSingleModeScenarioOnsen",
         13 => "WorkSingleModeScenarioBreeders",
         14 => "WorkSingleModeScenarioRamen",
+        15 => "WorkSingleModeScenarioFesta",
         _ => "Unknown",
     };
 
