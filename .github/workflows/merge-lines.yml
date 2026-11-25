@@ -32,22 +32,27 @@ jobs:
           set -e
           git checkout -f -B "merge/${L}-x-${R}" "upstream/${L}"
           if ! git merge --no-commit --no-ff "upstream/${R}"; then
-            echo CONFLICT | tee conflict.flag
-            git diff --name-only --diff-filter=U | tee conflicts.txt
+            echo "CONFLICT" > conflict.flag
+            git diff --name-only --diff-filter=U > conflicts.txt
             git merge --abort || true
-            exit 1
           fi
-      - name: upload conflict report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: conflicts
-          path: |
-            conflicts.txt
-            conflict.flag
-          if-no-files-found: ignore
+      - name: report conflicts to main
+        if: hashFiles('conflict.flag') != ''
+        run: |
+          set -e
+          mkdir -p docs/conflicts
+          D="docs/conflicts/$(date -u +%Y%m%dT%H%M%SZ).md"
+          { echo "# merge conflicts"; echo; echo "- left: ${L}"; echo "- right: ${R}"; echo; sed 's/^/- /' conflicts.txt; } > "$D"
+          git checkout main || true
+          git add "$D"
+          git commit -m "docs(conflicts): ${L} x ${R}" || true
+          git push origin HEAD:main || true
+          exit 1
+        env:
+          L: ${{ inputs.left }}
+          R: ${{ inputs.right }}
       - name: commit and push
-        if: success()
+        if: hashFiles('conflict.flag') == ''
         env:
           L: ${{ inputs.left }}
           R: ${{ inputs.right }}
@@ -57,12 +62,12 @@ jobs:
           git commit -m "merge: ${L} + ${R}"
           git push origin "HEAD:refs/heads/merge/${L}-x-${R}"
       - name: cargo check
-        if: success()
+        if: hashFiles('conflict.flag') == ''
         run: |
           rustup target add aarch64-linux-android
           cd hachimi_ura_plugin && cargo check --target aarch64-linux-android 2>&1 | tail -40
       - name: open PR
-        if: success()
+        if: hashFiles('conflict.flag') == ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           L: ${{ inputs.left }}
