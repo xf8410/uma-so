@@ -1,6 +1,11 @@
 name: build-so
 on:
   workflow_dispatch:
+    inputs:
+      with_matsuri:
+        description: "编译 matsuri 决策栈（世界模拟 + 运气分）"
+        required: false
+        default: "true"
   push:
     paths:
       - "hachimi_ura_plugin/**"
@@ -24,21 +29,25 @@ jobs:
             echo "AR_aarch64_linux_android=$BIN/llvm-ar"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android24-clang"
           } >> "$GITHUB_ENV"
-      - name: build release so
+      - name: vendor matsuri + engine
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/umaai-project/umaai-matsuri.git vendor/matsuri
+          git clone --depth 1 https://github.com/umaai-project/umaai-next.git vendor/matsuri/umaai_next
+          ls vendor/matsuri/crates
+      - name: build
         working-directory: hachimi_ura_plugin
         run: |
           set +e
-          cargo build --release --color never --target aarch64-linux-android > /tmp/build.log 2>&1
+          cargo build --release --color never --target aarch64-linux-android \
+            $( [ "${{ inputs.with_matsuri }}" = "false" ] && echo "" || echo "--features matsuri" ) \
+            > /tmp/build.log 2>&1
           RC=$?
           echo "cargo exit=$RC log_lines=$(wc -l < /tmp/build.log)"
           if [ $RC -ne 0 ]; then
-            LN=$(grep -nE "^error(\[|:)" /tmp/build.log | head -1 | cut -d: -f1)
-            echo "first_error_line=${LN:-none}"
-            if [ -n "$LN" ]; then
-              awk -v s="$LN" 'NR>=s-2 && NR<=s+22' /tmp/build.log
-            else
-              tail -30 /tmp/build.log
-            fi
+            LN=$(grep -nE "^error" /tmp/build.log | head -1 | cut -d: -f1)
+            echo "first_error=${LN:-none}"
+            [ -n "$LN" ] && awk -v s="$LN" 'NR>=s-3 && NR<=s+25' /tmp/build.log || tail -40 /tmp/build.log
             exit 1
           fi
           ls -la target/aarch64-linux-android/release/libhachimi_ura.so
@@ -50,10 +59,11 @@ jobs:
           set -e
           cd hachimi_ura_plugin
           VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
-          OUT="libhachimi_ura-${VER}-festafix.so"
+          TAG="${{ inputs.with_matsuri == 'false' && 'builds-lite' || 'builds' }}"
+          OUT="libhachimi_ura-${VER}.so"
           cp target/aarch64-linux-android/release/libhachimi_ura.so "/tmp/$OUT"
           cd /tmp
-          gh release view builds -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create builds -R "$GITHUB_REPOSITORY" --title "SO builds" --notes "自动构建"
-          gh release upload builds "/tmp/$OUT" -R "$GITHUB_REPOSITORY" --clobber
+          gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "SO $TAG" --notes "auto"
+          gh release upload "$TAG" "/tmp/$OUT" -R "$GITHUB_REPOSITORY" --clobber
           sha256sum "/tmp/$OUT"
