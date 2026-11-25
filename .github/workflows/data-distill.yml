@@ -1,0 +1,33 @@
+name: data-distill
+on:
+  workflow_dispatch: {}
+  schedule: [{cron: "30 18 * * *"}]
+permissions: {contents: write}
+jobs:
+  distill:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: "20"}
+      - name: summarize runs
+        run: |
+          node - <<'JS'
+          const fs=require('fs'),p=require('path');
+          const root='data/runs'; if(!fs.existsSync(root)){console.log('no runs');process.exit(0);}
+          const files=[];
+          (function walk(d){for(const e of fs.readdirSync(d,{withFileTypes:true})){
+            const f=p.join(d,e.name); e.isDirectory()?walk(f):f.endsWith('.json')&&files.push(f);}})(root);
+          const day=new Date().toISOString().slice(0,10);
+          const out=files.map(f=>{try{const j=JSON.parse(fs.readFileSync(f,'utf8'));
+            return (j.turns||[]).map(t=>JSON.stringify({run:j.run_id,turn:t.turn,vital:t.vital,
+              status:t.status,gains:t.gains,hint:t.hint,chosen:t.chosen,candidates:t.candidates}));
+          }catch(e){return []}}).flat();
+          fs.mkdirSync('data/distill',{recursive:true});
+          fs.writeFileSync(`data/distill/${day}.jsonl`,out.join('\n')+'\n');
+          console.log('rows',out.length);
+          JS
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "data: distill $(date -u +%F)"
+          file_pattern: "data/distill/*.jsonl"
