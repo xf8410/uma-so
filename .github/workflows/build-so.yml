@@ -18,7 +18,6 @@ jobs:
       - name: ndk env
         run: |
           NDK="${ANDROID_NDK_LATEST_HOME:-$ANDROID_NDK_HOME}"
-          echo "using NDK=$NDK"
           BIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
           {
             echo "CC_aarch64_linux_android=$BIN/aarch64-linux-android24-clang"
@@ -28,11 +27,23 @@ jobs:
       - name: build release so
         working-directory: hachimi_ura_plugin
         run: |
-          cargo build --release --target aarch64-linux-android 2>&1 | tail -30
-          SO=target/aarch64-linux-android/release/libhachimi_ura.so
-          ls -la "$SO"
-          sha256sum "$SO"
-      - name: publish to release tag builds
+          set +e
+          cargo build --release --target aarch64-linux-android > /tmp/build.log 2>&1
+          RC=$?
+          echo "cargo exit=$RC  log_lines=$(wc -l < /tmp/build.log)"
+          if [ $RC -ne 0 ]; then
+            echo "===== ERRORS ====="
+            grep -n "^error" /tmp/build.log | head -10
+            echo "===== FIRST ERROR CONTEXT ====="
+            LN=$(grep -n "^error" /tmp/build.log | head -1 | cut -d: -f1)
+            awk -v s="$LN" 'NR>=s-2 && NR<=s+16' /tmp/build.log
+            echo "===== LAST 20 ====="
+            tail -20 /tmp/build.log
+            exit 1
+          fi
+          ls -la target/aarch64-linux-android/release/libhachimi_ura.so
+          sha256sum target/aarch64-linux-android/release/libhachimi_ura.so
+      - name: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -40,10 +51,9 @@ jobs:
           cd hachimi_ura_plugin
           VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
           OUT="libhachimi_ura-${VER}-festafix.so"
-          cp "target/aarch64-linux-android/release/libhachimi_ura.so" "/tmp/$OUT"
+          cp target/aarch64-linux-android/release/libhachimi_ura.so "/tmp/$OUT"
           cd /tmp
           gh release view builds -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
-            gh release create builds -R "$GITHUB_REPOSITORY" --title "SO builds" --notes "自动构建：含 scenario 15 (Festa) 映射 + B1 并发修复"
+            gh release create builds -R "$GITHUB_REPOSITORY" --title "SO builds" --notes "自动构建"
           gh release upload builds "/tmp/$OUT" -R "$GITHUB_REPOSITORY" --clobber
-          echo "=== uploaded ==="
           sha256sum "/tmp/$OUT"
