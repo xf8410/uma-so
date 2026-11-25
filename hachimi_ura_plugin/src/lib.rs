@@ -296,9 +296,9 @@ struct SniffMetadata {
 static mut SNIFF_METADATA: Vec<SniffMetadata> = Vec::new();
 // Bounded temporal FIFO; unmatched responses are reported with request_id=0.
 static mut SNIFF_RESPONSE_QUEUE: Vec<(u64, String)> = Vec::new();
-static mut PENDING_URL: String = String::new();
-static mut PENDING_HEADERS: Vec<(String, String)> = Vec::new();
-static mut PENDING_REQ_ID: u64 = 0;
+static PENDING_URL: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+static PENDING_HEADERS: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+static PENDING_REQ_ID: AtomicU64 = AtomicU64::new(0);
 // CompressRequest/DecompressResponse/Post hook addresses (via Interceptor API)
 static mut COMPRESS_REQUEST_ADDR: usize = 0;
 static mut DECOMPRESS_RESPONSE_ADDR: usize = 0;
@@ -323,8 +323,8 @@ struct UnityRequestObservation {
 }
 static UNITY_OBSERVATIONS: Mutex<Vec<UnityRequestObservation>> = Mutex::new(Vec::new());
 // Pending request body parking (CompressRequest → Post matching)
-static mut PENDING_REQ_BODY: Option<Vec<u8>> = None;
-static mut PENDING_COMPRESSED: usize = 0;
+static PENDING_REQ_BODY: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+static PENDING_COMPRESSED: AtomicU64 = AtomicU64::new(0);
 
 fn sniff_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
@@ -8112,7 +8112,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             }
             SNIFF_METADATA.clear();
             SNIFF_RESPONSE_QUEUE.clear();
-            PENDING_REQ_BODY = None;
+            *PENDING_REQ_BODY.lock().unwrap() = None;
         }
         r#"{"ok":true}"#.to_string()
     } else if path.starts_with("/debug/hooklog") {
@@ -10379,8 +10379,8 @@ extern "C" fn compress_request_hook_handler(data: *mut c_void) -> *mut c_void {
         let original: FnType = std::mem::transmute(trampoline);
         let compressed = original(data);
         if !body.is_empty() && POST_ADDR != 0 {
-            PENDING_REQ_BODY = Some(body);
-            PENDING_COMPRESSED = compressed as usize;
+            *PENDING_REQ_BODY.lock().unwrap() = Some(body);
+            PENDING_COMPRESSED.store(compressed as usize, Ordering::Relaxed);
         }
         compressed
     }));
@@ -10426,8 +10426,8 @@ extern "C" fn decompress_response_hook_handler(data: *mut c_void) -> *mut c_void
                         gain_id,
                         next_block_idx,
                         loop_exit_gain_id,
-                        PENDING_REQ_ID,
-                        json_escape(&PENDING_URL),
+                        PENDING_REQ_ID.load(Ordering::Relaxed),
+                        json_escape(PENDING_URL.lock().unwrap().as_str()),
                         bytes.len(),
                         bytes.len() > preview_len,
                         hex_encode(&bytes[..bytes.len().min(64)]),
@@ -10500,8 +10500,8 @@ extern "C" fn post_hook_handler(
 
         if SNIFF_ENABLED.load(Ordering::Relaxed) {
             let rid = SNIFF_REQ_ID.fetch_add(1, Ordering::Relaxed);
-            PENDING_REQ_ID = rid;
-            let body = PENDING_REQ_BODY.take().unwrap_or_default();
+            PENDING_REQ_ID.store(rid, Ordering::Relaxed);
+            let body = PENDING_REQ_BODY.lock().unwrap().take().unwrap_or_default();
             let headers_json = format_headers_json(&req_headers);
             let url_str = game_url.clone().unwrap_or_default();
             {
@@ -10516,8 +10516,8 @@ extern "C" fn post_hook_handler(
                     SNIFF_REQUESTS.remove(0);
                 }
             }
-            PENDING_URL = game_url.clone().unwrap_or_default();
-            PENDING_HEADERS = req_headers.clone();
+            *PENDING_URL.lock().unwrap() = game_url.clone().unwrap_or_default();
+            *PENDING_HEADERS.lock().unwrap() = req_headers.clone();
         }
 
         let _ = this;
