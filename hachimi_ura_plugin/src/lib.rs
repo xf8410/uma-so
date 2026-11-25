@@ -1843,6 +1843,7 @@ unsafe fn try_get_scenario_obj(
             "get_Breeders",
         ], // ★ 育马者杯
         14 => &["get_ScenarioRamen", "get_WorkScenarioRamen", "get_Ramen"], // ★ 拉面杯
+        15 => &["get_ScenarioFesta", "get_WorkScenarioFesta", "get_Festa"], // ★ 骏大祭（2.33.0 实测：get_ScenarioFesta）
         _ => &[],
     };
 
@@ -1983,6 +1984,7 @@ unsafe fn read_scenario_detail() -> String {
                 12 => "WorkSingleModeScenarioOnsenDataSet",
                 13 => "WorkSingleModeScenarioBreedersDataSet",
                 14 => "WorkSingleModeScenarioRamenDataSet",
+                15 => "WorkSingleModeScenarioFestaDataSet",
                 _ => "UnknownDataSet",
             };
             let dataset_class = find_class_by_short_name(image, dataset_class_name);
