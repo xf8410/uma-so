@@ -9,6 +9,8 @@ permissions:
   pull-requests: write
 jobs:
   merge:
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
