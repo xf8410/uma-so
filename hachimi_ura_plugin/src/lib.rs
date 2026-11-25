@@ -1859,7 +1859,7 @@ unsafe fn find_scenario_getter_by_metadata(chara_class: *mut c_void) -> Option<S
             continue;
         }
         if let Some(pc) = get_pcount {
-            if pc != 0 {
+            if pc(m) != 0 {
                 continue;
             }
         }
