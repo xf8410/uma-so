@@ -5,9 +5,9 @@ on:
     paths:
       - "hachimi_ura_plugin/**"
 permissions:
-  contents: read
+  contents: write
 jobs:
-  check:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,7 +25,25 @@ jobs:
             echo "AR_aarch64_linux_android=$BIN/llvm-ar"
             echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$BIN/aarch64-linux-android24-clang"
           } >> "$GITHUB_ENV"
-      - name: cargo check
+      - name: build release so
         working-directory: hachimi_ura_plugin
         run: |
-          cargo check --target aarch64-linux-android 2>&1 | tail -80
+          cargo build --release --target aarch64-linux-android 2>&1 | tail -30
+          SO=target/aarch64-linux-android/release/libhachimi_ura.so
+          ls -la "$SO"
+          sha256sum "$SO"
+      - name: publish to release tag builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          cd hachimi_ura_plugin
+          VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
+          OUT="libhachimi_ura-${VER}-festafix.so"
+          cp "target/aarch64-linux-android/release/libhachimi_ura.so" "/tmp/$OUT"
+          cd /tmp
+          gh release view builds -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create builds -R "$GITHUB_REPOSITORY" --title "SO builds" --notes "自动构建：含 scenario 15 (Festa) 映射 + B1 并发修复"
+          gh release upload builds "/tmp/$OUT" -R "$GITHUB_REPOSITORY" --clobber
+          echo "=== uploaded ==="
+          sha256sum "/tmp/$OUT"
