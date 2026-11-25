@@ -1,0 +1,61 @@
+name: merge-lines
+on:
+  workflow_dispatch:
+    inputs:
+      base:   {description: "目标分支", required: true, default: main}
+      left:   {description: "来源分支 A", required: true, default: workbench/rng-consumption-probe-3.29.1}
+      right:  {description: "来源分支 B", required: true, default: workbench/resource-hooks-and-strip-factor}
+      open_pr:{description: "成功后开 PR", required: false, default: "true"}
+permissions:
+  contents: write
+  pull-requests: write
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - name: git identity
+        run: |
+          git config user.name  "merge-bot"
+          git config user.email "merge-bot@users.noreply.github.com"
+      - name: fetch all
+        run: git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+      - name: dry merge (both sides)
+        run: |
+          set -e
+          git checkout -B merge/${{ inputs.left }}-x-${{ inputs.right }} origin/${{ inputs.left }}
+          if ! git merge --no-commit --no-ff origin/${{ inputs.right }}; then
+            echo "CONFLICT" | tee conflict.flag
+            git diff --name-only --diff-filter=U | tee conflicts.txt
+            git merge --abort || true
+            exit 1
+          fi
+      - name: upload conflict report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conflicts
+          path: |
+            conflicts.txt
+            conflict.flag
+          if-no-files-found: ignore
+      - name: commit + push
+        if: success()
+        run: |
+          git add -A
+          git commit -m "merge: ${{ inputs.left }} + ${{ inputs.right }} → ${{ inputs.base }}"
+          git push origin HEAD:refs/heads/merge/${{ inputs.left }}-x-${{ inputs.right }}
+      - name: cargo check
+        if: success()
+        run: |
+          rustup target add aarch64-linux-android
+          cd hachimi_ura_plugin && cargo check --target aarch64-linux-android 2>&1 | tail -40
+      - name: open PR
+        if: success() && inputs.open_pr == 'true'
+        env: {GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"}
+        run: |
+          gh pr create --base "${{ inputs.base }}" \
+            --head "merge/${{ inputs.left }}-x-${{ inputs.right }}" \
+            --title "merge: ${{ inputs.left }} + ${{ inputs.right }}" \
+            --body "三方合并产物；cargo check 通过后请人工审端点表与 hook 同址冲突。" || true
