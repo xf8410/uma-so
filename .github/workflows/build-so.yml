@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       with_matsuri:
-        description: "编译 matsuri 决策栈（世界模拟 + 运气分）"
+        description: "编译 matsuri 决策栈"
         required: false
         default: "true"
   push:
@@ -33,21 +33,29 @@ jobs:
         run: |
           set -e
           git clone --depth 1 https://github.com/umaai-project/umaai-matsuri.git vendor/matsuri
-          git clone --depth 1 https://github.com/umaai-project/umaai-next.git vendor/matsuri/umaai_next
-          ls vendor/matsuri/crates
+          cd vendor/matsuri
+          git submodule update --init --depth 1 umaai_next || {
+            echo "submodule failed, fallback to direct clone"
+            rm -rf umaai_next
+            git clone --depth 1 https://github.com/umaai-project/umaai-next.git umaai_next
+          }
+          echo "--- engine crates ---"
+          ls umaai_next/crates
+          echo "--- matsuri crates ---"
+          ls crates
       - name: build
         working-directory: hachimi_ura_plugin
         run: |
           set +e
-          cargo build --release --color never --target aarch64-linux-android \
-            $( [ "${{ inputs.with_matsuri }}" = "false" ] && echo "" || echo "--features matsuri" ) \
-            > /tmp/build.log 2>&1
+          FEAT=""
+          if [ "${{ inputs.with_matsuri }}" != "false" ]; then FEAT="--features matsuri"; fi
+          cargo build --release --color never --target aarch64-linux-android $FEAT > /tmp/build.log 2>&1
           RC=$?
           echo "cargo exit=$RC log_lines=$(wc -l < /tmp/build.log)"
           if [ $RC -ne 0 ]; then
             LN=$(grep -nE "^error" /tmp/build.log | head -1 | cut -d: -f1)
             echo "first_error=${LN:-none}"
-            [ -n "$LN" ] && awk -v s="$LN" 'NR>=s-3 && NR<=s+25' /tmp/build.log || tail -40 /tmp/build.log
+            if [ -n "$LN" ]; then awk -v s="$LN" 'NR>=s-1 && NR<=s+30' /tmp/build.log; else tail -40 /tmp/build.log; fi
             exit 1
           fi
           ls -la target/aarch64-linux-android/release/libhachimi_ura.so
