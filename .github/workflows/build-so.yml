@@ -43,6 +43,13 @@ jobs:
           ls umaai_next/crates
           echo "--- matsuri crates ---"
           ls crates
+      - name: patch engine workspace overrides
+        run: |
+          set -e
+          echo "--- 需要 patch 的 default-features 覆盖 ---"
+          grep -rn "default-features = false" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
+          sed -i -E "s/(=[[:space:]]*\{ *workspace *= *true *), *default-features *= *false/\1/" vendor/matsuri/umaai_next/crates/*/Cargo.toml
+          grep -rn "default-features" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
       - name: build
         working-directory: hachimi_ura_plugin
         run: |
