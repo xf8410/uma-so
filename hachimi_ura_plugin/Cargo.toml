@@ -15,6 +15,8 @@ libc = "0.2"
 # matsuri 决策栈（CI 里 vendor 到 ../vendor/matsuri，本地不提交）
 #   matsuri-ai  = 在线档：帧 → 局面还原 → 路由 → 决策
 #   umaai       = 引擎配置 / 帧解析（matsuri-ai 的上游，显式依赖便于取 Config）
+# 注意：这三者是 vendor 里的 workspace 成员，各自从 vendor/matsuri/Cargo.toml 继承
+# version / edition；cargo 能沿 path 向上找到 workspace root，因此可作外部 path 依赖。
 matsuri-core = { path = "../vendor/matsuri/crates/matsuri-core", optional = true }
 matsuri-ai = { path = "../vendor/matsuri/crates/matsuri-ai", optional = true }
 umaai = { path = "../vendor/matsuri/umaai_next/crates/umaai", optional = true }
