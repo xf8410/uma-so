@@ -43,6 +43,22 @@ jobs:
           ls umaai_next/crates
           echo "--- matsuri crates ---"
           ls crates
+          echo "--- matsuri data ---"
+          ls -la data
+      - name: vendor gamedata (引擎六表，供 include_str! 内嵌)
+        run: |
+          set -e
+          rm -rf vendor/gamedata
+          mkdir -p vendor/gamedata
+          cp -v vendor/matsuri/umaai_next/gamedata/*.json vendor/gamedata/
+          ls -la vendor/gamedata
+          # 内嵌资产存在性校验：缺一个就别往下编译
+          for f in constants.json umaDB.json cardDB.json events.json text_data_dict.json manifest.json; do
+            test -s "vendor/gamedata/$f" || { echo "missing gamedata/$f"; exit 1; }
+          done
+          for f in scenario_matsuri.json matsuri_config.toml ai_config.toml; do
+            test -s "vendor/matsuri/data/$f" || { echo "missing matsuri/data/$f"; exit 1; }
+          done
       - name: patch engine workspace overrides
         run: |
           set -e
@@ -62,11 +78,27 @@ jobs:
           if [ $RC -ne 0 ]; then
             LN=$(grep -nE "^error" /tmp/build.log | head -1 | cut -d: -f1)
             echo "first_error=${LN:-none}"
-            if [ -n "$LN" ]; then awk -v s="$LN" 'NR>=s-1 && NR<=s+30' /tmp/build.log; else tail -40 /tmp/build.log; fi
+            if [ -n "$LN" ]; then awk -v s="$LN" 'NR>=s-1 && NR<=s+30' /tmp/build.log; else tail -60 /tmp/build.log; fi
             exit 1
           fi
           ls -la target/aarch64-linux-android/release/libhachimi_ura.so
           sha256sum target/aarch64-linux-android/release/libhachimi_ura.so
+          SIZE=$(stat -c%s target/aarch64-linux-android/release/libhachimi_ura.so)
+          echo "so_size=$SIZE"
+          if [ "${{ inputs.with_matsuri }}" != "false" ]; then
+            if [ "$SIZE" -lt 7000000 ]; then
+              echo "::error::so 只有 $SIZE 字节 —— matsuri 决策栈没被链接进来（内嵌数据 ~7MB）"
+              exit 1
+            fi
+            echo "--- 决策栈符号自检 ---"
+            for s in scenario_matsuri matsuri_bridge MatsuriGame; do
+              if grep -aq "$s" target/aarch64-linux-android/release/libhachimi_ura.so; then
+                echo "found: $s"
+              else
+                echo "::warning::未找到符号 $s（strip 后可能只剩字符串，仅供参考）"
+              fi
+            done
+          fi
       - name: publish
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -75,7 +107,7 @@ jobs:
           cd hachimi_ura_plugin
           VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
           TAG="${{ inputs.with_matsuri == 'false' && 'builds-lite' || 'builds' }}"
-          OUT="libhachimi_ura-${VER}.so"
+          OUT="libhachimi_ura-${VER}-${GITHUB_SHA:0:8}.so"
           cp target/aarch64-linux-android/release/libhachimi_ura.so "/tmp/$OUT"
           cd /tmp
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
