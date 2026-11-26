@@ -578,6 +578,60 @@ fn ui_hook_log(msg: String) {
 }
 static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
+// ===== 高速播放时长压到 3 帧 =====
+// SingleModeUtils.GetHighSpeedPlayDuration() -> f32（秒），static
+static DUR3F_ON: AtomicBool = AtomicBool::new(false);
+static DUR3F_HITS: AtomicU64 = AtomicU64::new(0);
+static mut ORIG_DURATION_PROLOGUE: [u8; 16] = [0; 16];
+const FRAME3_SEC: f32 = 3.0 / 60.0; // 3 帧 @60fps = 0.05s
+
+extern "C" fn high_speed_duration_hook() -> f32 {
+    if DUR3F_ON.load(Ordering::Relaxed) {
+        DUR3F_HITS.fetch_add(1, Ordering::Relaxed);
+        return FRAME3_SEC;
+    }
+    unsafe {
+        let tramp = interceptor_get_trampoline(high_speed_duration_hook as usize);
+        if tramp == 0 {
+            return 0.0;
+        }
+        let orig: unsafe extern "C" fn() -> f32 = std::mem::transmute(tramp);
+        orig()
+    }
+}
+
+unsafe fn install_duration_hook() {
+    let image = get_image();
+    if image.is_null() {
+        return;
+    }
+    let mut c = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("SingleModeUtils").as_ptr(),
+    );
+    if c.is_null() {
+        c = find_class_by_short_name(image, "SingleModeUtils");
+    }
+    if c.is_null() {
+        ura_log(3, "dur3f: SingleModeUtils not found");
+        return;
+    }
+    let a = find_method_addr(c, "GetHighSpeedPlayDuration", 0);
+    if a == 0 {
+        ura_log(3, "dur3f: method not found");
+        return;
+    }
+    if install_hook_safe(
+        "SingleModeUtils.GetHighSpeedPlayDuration",
+        a,
+        high_speed_duration_hook as usize,
+        &mut ORIG_DURATION_PROLOGUE,
+    ) {
+        ura_log(3, "dur3f: installed");
+    }
+}
+
 // ===== 训练/支援卡过场诊断（只记录，不改行为）=====
 static CUTIN_TRACE: std::sync::Mutex<Vec<(u64, &'static str, String)>> =
     std::sync::Mutex::new(Vec::new());
@@ -7631,6 +7685,7 @@ fn push_loop() {
                 install_event_choice_hook();
                 install_ui_text_hook();
                 install_cutin_trace();
+                install_duration_hook();
                 rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
@@ -8409,6 +8464,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/auth/clear",
             "/api/sniff/unity",
         "/api/training/anim_skip/trace",
+        "/api/speed/duration3f",
+        "/api/speed/duration3f/on",
+        "/api/speed/duration3f/off",
         "/api/training/anim_skip/trace_clear",
         "/matsuri/ui_texts",
             "/api/md5log",
@@ -8528,6 +8586,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
             log_snapshot("data", &result);
         }
         result
+    } else if path == "/api/speed/duration3f" {
+        format!(
+            r#"{{"ok":true,"enabled":{},"hits":{},"frame3_sec":{}}}"#,
+            DUR3F_ON.load(Ordering::Relaxed),
+            DUR3F_HITS.load(Ordering::Relaxed),
+            FRAME3_SEC
+        )
+    } else if path == "/api/speed/duration3f/on" {
+        DUR3F_ON.store(true, Ordering::Relaxed);
+        r#"{"ok":true,"enabled":true,"note":"high speed playback clamped to 3 frames"}"#.to_string()
+    } else if path == "/api/speed/duration3f/off" {
+        DUR3F_ON.store(false, Ordering::Relaxed);
+        r#"{"ok":true,"enabled":false}"#.to_string()
     } else if path == "/api/training/anim_skip/trace" {
         let v = CUTIN_TRACE.lock().map(|g| g.clone()).unwrap_or_default();
         let rows: Vec<String> = v
