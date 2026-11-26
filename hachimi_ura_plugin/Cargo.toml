@@ -13,14 +13,17 @@ rusqlite = { version = "0.31", default-features = false, features = ["bundled"] 
 ureq = { version = "2", features = ["tls"] }
 libc = "0.2"
 # matsuri 决策栈（CI 里 vendor 到 ../vendor/matsuri，本地不提交）
+#   matsuri-ai  = 在线档：帧 → 局面还原 → 路由 → 决策
+#   umaai       = 引擎配置 / 帧解析（matsuri-ai 的上游，显式依赖便于取 Config）
 matsuri-core = { path = "../vendor/matsuri/crates/matsuri-core", optional = true }
 matsuri-ai = { path = "../vendor/matsuri/crates/matsuri-ai", optional = true }
-toml = { version = "0.8", optional = true }
+umaai = { path = "../vendor/matsuri/umaai_next/crates/umaai", optional = true }
+toml = { version = "0.9", optional = true }
 
 [features]
 default = []
-# 打开后把完整 matsuri 决策栈（在线档：帧 → 局面还原 → 决策）真正编进来
-matsuri = ["dep:matsuri-core", "dep:matsuri-ai", "dep:toml"]
+# 打开后把完整 matsuri 决策栈（在线档）真正编进来
+matsuri = ["dep:matsuri-core", "dep:matsuri-ai", "dep:umaai", "dep:toml"]
 
 [profile.release]
 opt-level = 3
