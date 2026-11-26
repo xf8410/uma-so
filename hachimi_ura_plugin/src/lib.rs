@@ -573,7 +573,7 @@ static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 static CUTIN_TRACE: std::sync::Mutex<Vec<(u64, &'static str, String)>> =
     std::sync::Mutex::new(Vec::new());
 static CUTIN_TRACE_ON: AtomicBool = AtomicBool::new(true);
-static CUTIN_THIS: AtomicUsize = AtomicUsize::new(0);
+static CUTIN_THIS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 static CUTIN_T0: AtomicU64 = AtomicU64::new(0);
 static mut ORIG_CUTIN_INIT_A: [u8; 16] = [0; 16];
 static mut ORIG_CUTIN_INIT_B: [u8; 16] = [0; 16];
