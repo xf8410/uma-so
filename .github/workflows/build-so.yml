@@ -58,6 +58,7 @@ jobs:
           for f in scenario_matsuri.json matsuri_config.toml ai_config.toml; do
             test -s "vendor/matsuri/data/$f" || { echo "missing matsuri/data/$f"; exit 1; }
           done
+          du -sh vendor/gamedata
       - name: patch engine workspace overrides
         run: |
           set -e
@@ -81,26 +82,39 @@ jobs:
           RC=$?
           echo "cargo exit=$RC log_lines=$(wc -l < /tmp/build.log)"
           if [ $RC -ne 0 ]; then
-            grep -nE "^error" /tmp/build.log | head -40
+            grep -nE "^error|error\[E" /tmp/build.log | head -40
             exit 1
           fi
-          ls -la target/aarch64-linux-android/release/libhachimi_ura.so
-          sha256sum target/aarch64-linux-android/release/libhachimi_ura.so
-          SIZE=$(stat -c%s target/aarch64-linux-android/release/libhachimi_ura.so)
+          SO=target/aarch64-linux-android/release/libhachimi_ura.so
+          ls -la "$SO"
+          sha256sum "$SO"
+          SIZE=$(stat -c%s "$SO")
+          echo "so_size=$SIZE" > /tmp/size.txt
           echo "so_size=$SIZE"
-          if [ "${{ inputs.with_matsuri }}" != "false" ]; then
-            if [ "$SIZE" -lt 7000000 ]; then
-              echo "::error::so 只有 $SIZE 字节 —— matsuri 决策栈没被链接进来（内嵌数据约 7MB）"
+      - name: verify（只看真正会进产物的字符串）
+        working-directory: hachimi_ura_plugin
+        run: |
+          set -e
+          SO=target/aarch64-linux-android/release/libhachimi_ura.so
+          SIZE=$(stat -c%s "$SO")
+          {
+            echo "so_size=$SIZE"
+            echo "gamedata_bytes=$(du -sb ../vendor/gamedata | cut -f1)"
+            echo "scenario_json_bytes=$(stat -c%s ../vendor/matsuri/data/scenario_matsuri.json)"
+          } | tee /tmp/size.txt
+          for k in api/ai/status api/ai/init matsuri_data; do
+            if grep -aq "$k" "$SO"; then
+              echo "found: $k"
+            else
+              echo "::error::未找到 $k —— 该功能没进产物"
               exit 1
             fi
-            for k in scenario_matsuri matsuri_bridge api/ai/status; do
-              if grep -aq "$k" target/aarch64-linux-android/release/libhachimi_ura.so; then
-                echo "found: $k"
-              else
-                echo "::error::未找到 $k —— 该功能没进产物"
-                exit 1
-              fi
-            done
+          done
+          if [ "${{ inputs.with_matsuri }}" != "false" ]; then
+            if [ "$SIZE" -lt 9000000 ]; then
+              echo "::error::so 只有 $SIZE 字节（预期 >9MB：原 4.9MB + 内嵌 gamedata）—— 决策栈/数据没链接进来"
+              exit 1
+            fi
           fi
       - name: dump error to repo（失败时把日志落到 docs/，供离线阅读）
         if: failure()
@@ -112,17 +126,21 @@ jobs:
             echo "- run: ${{ github.run_id }}"
             echo "- sha: ${{ github.sha }}"
             echo
+            echo '## 大小与环境'
+            echo '```'
+            cat /tmp/size.txt 2>/dev/null
+            echo '```'
             echo '## patch 输出'
             echo '```'
-            head -60 /tmp/patch.log 2>/dev/null
+            head -40 /tmp/patch.log 2>/dev/null
             echo '```'
             echo '## cargo error 行'
             echo '```'
-            grep -nE "^error|^warning: unused|error\[E" /tmp/build.log 2>/dev/null | head -60
+            grep -nE "^error|error\[E" /tmp/build.log 2>/dev/null | head -40
             echo '```'
             echo '## cargo 日志尾部'
             echo '```'
-            tail -120 /tmp/build.log 2>/dev/null
+            tail -80 /tmp/build.log 2>/dev/null
             echo '```'
           } > docs/CI_LAST_ERROR.md
           git config user.name "ci-bot"
