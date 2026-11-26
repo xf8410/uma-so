@@ -565,7 +565,7 @@ extern "C" fn ui_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
 }
 
 static mut ORIG_TMP_TEXT_PROLOGUE: [u8; 16] = [0; 16];
-static mut ORIG_UI_TEXT_PROLOGUE: [u8; 16] = [0; 16];
+static mut ORIG_UNITY_UI_TEXT_PROLOGUE: [u8; 16] = [0; 16];
 static TMP_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
@@ -632,7 +632,7 @@ unsafe fn install_ui_text_hook() {
                     "UI.Text.set_text",
                     a,
                     ui_text_set_text_hook as usize,
-                    &mut ORIG_UI_TEXT_PROLOGUE,
+                    &mut ORIG_UNITY_UI_TEXT_PROLOGUE,
                 )
             {
                 UI_TEXT_HOOKED.store(true, Ordering::Relaxed);
