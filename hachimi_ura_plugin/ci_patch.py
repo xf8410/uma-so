@@ -7,6 +7,11 @@
 
 用法（在 hachimi_ura_plugin/ 下）：
     python3 ci_patch.py
+
+锚点清单（改动 lib.rs 结构时必须同步）：
+  1. `mod ui_rename;`                       —— 模块声明区末尾
+  2. `    "/scenario",`                     —— const ENDPOINTS 里的首条（第一处命中）
+  3. `    } else if path == "/scenario" {`  —— 请求路由链
 """
 
 import sys
