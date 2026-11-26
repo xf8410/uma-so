@@ -16,12 +16,20 @@
                                                            +20 SettingId    Int32
                                                            +24 BaseWeight   Int32
 
+同族表（同一持有者，后续按需扩展）：
+  +3192 scenario   +3200 state      +3216 basePt     +3224 outingBasePt
+  +3232 modify     +3240 modifyPt   +3248 conditionSet +3256 filter
+  +3264 filterDetail +3272 defaultPlan +3280 defaultPlanSet
+  +3288 stopCondition +3296 stopTrigger +3304 stopperEvent
+  +3312 hideSkill  +3320 continueCondition +3328 modifyLegend
+  +3336 basePtOnsen +3344 conditionSetOnsen
+
 本脚本只读，不写任何字节：
   1. get_singleton(MasterDataManager) 取实例（不 invoke）
   2. +3208 取 MasterOmakaseCommand
   3. +24 取 Dictionary
   4. 输出 Dictionary 头 0x60 原始字节、buckets / entries 指针、count / freeList / freeCount / version
-  5. 输出 entries 前 8 项 × 24 字节的原始 hex（用于反推 entry 跨度与 key/value 偏移）
+  5. 输出 entries 前 8 项 × 24 字节的 u64 词与原始 hex（用于反推 entry 跨度与 key/value 偏移）
 
 布局判定纪律（来自复核意见）：
   - 单份 dump 不足以定布局：整数 key 与 hashCode 可能相等，两列都能 100% 命中；
@@ -87,19 +95,18 @@ unsafe fn dump_omakase_dict() -> String {
 
     // entries 前 8 项 × 24 字节（int key + 引用 value 的常见跨度，仅作候选）
     let mut ent_hex = String::new();
-    let mut ent_stride24 = String::new();
+    let mut ent_words = String::new();
     if !entries.is_null() {
         let n = 8usize;
         let stride = 24usize;
         let src = std::slice::from_raw_parts(entries as *const u8, n * stride);
         ent_hex = hex_encode(src);
-        // 同一段按 8 字节切片，便于直接看每 8 字节的读数
         let mut words: Vec<String> = Vec::new();
         for i in 0..(n * stride / 8) {
             let w = std::ptr::read_unaligned::<u64>((entries as *const u8).add(i * 8) as *const u64);
             words.push(format!("{:016x}", w));
         }
-        ent_stride24 = words.join(",");
+        ent_words = words.join(",");
     }
 
     let buck_hex = if buckets.is_null() {
@@ -123,7 +130,7 @@ unsafe fn dump_omakase_dict() -> String {
         keys,
         values,
         buck_hex,
-        ent_stride24,
+        ent_words,
         ent_hex
     )
 }
