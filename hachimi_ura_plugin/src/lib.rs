@@ -2103,6 +2103,12 @@ unsafe fn read_scenario_detail() -> String {
         to_cstr("Gallop").as_ptr(),
         to_cstr("WorkSingleModeCharaData").as_ptr(),
     );
+    {
+        let total_turn = read_obscured_int_at(sm_data_obj, 68); // _totalTurnNum
+        if total_turn <= 0 {
+            return r#"{"error":"not_in_training"}"#.to_string();
+        }
+    }
     let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
     if chara_obj.is_null() {
         return r#"{"error":"no_chara"}"#.to_string();
@@ -3009,6 +3015,12 @@ unsafe fn process_single_mode_data(
             r#"{{"error":"WorkSingleModeData_class_null","month":{},"half":{}}}"#,
             month, half
         );
+    }
+    {
+        let total_turn = read_obscured_int_at(sm_data_obj, 68); // _totalTurnNum
+        if total_turn <= 0 {
+            return r#"{"error":"not_in_training"}"#.to_string();
+        }
     }
     let chara_obj = call_getter_ref(sm_data_class, sm_data_obj, "get_Character");
     if chara_obj.is_null() {
@@ -5123,6 +5135,14 @@ unsafe fn read_summary_inner_impl() -> String {
         return r#"{"error":"no_chara_class"}"#.to_string();
     }
 
+    // ★ 2.33.0 门禁：非育成态 chara_obj 可能已释放，读字段必 SIGSEGV（v3.28.15 同款）
+    {
+        let total_turn = read_obscured_int_at(sm_obj, 68); // _totalTurnNum
+        if total_turn <= 0 {
+            log_predict_step("S:gate_not_in_training");
+            return r#"{"error":"not_in_training"}"#.to_string();
+        }
+    }
     log_predict_step("S:before_get_character");
     let chara_obj = call_getter_ref(sm_class, sm_obj, "get_Character"); // [INVOKE-02] get_Character — 唯一调用
     log_predict_step("S:after_get_character");
@@ -12900,6 +12920,12 @@ unsafe fn debug_params_inc_dec() -> String {
         to_cstr("Gallop").as_ptr(),
         to_cstr("WorkSingleModeCharaData").as_ptr(),
     );
+    {
+        let total_turn = read_obscured_int_at(sm_data_obj, 68); // _totalTurnNum
+        if total_turn <= 0 {
+            return r#"{"error":"not_in_training"}"#.to_string();
+        }
+    }
     let chara_obj = call_getter_ref(
         find_class(
             image,
