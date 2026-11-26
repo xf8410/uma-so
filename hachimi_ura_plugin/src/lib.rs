@@ -578,6 +578,47 @@ fn ui_hook_log(msg: String) {
 }
 static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
+// ===== 文件日志：崩溃也能留下 =====
+// 落盘 /sdcard/Download/uma_so/log/ura.log，任何线程可写；读端点 /api/log/file
+static FLOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const FLOG_DIR: &str = "/sdcard/Download/uma_so/log";
+const FLOG_PATH: &str = "/sdcard/Download/uma_so/log/ura.log";
+static FLOG_LINES: AtomicU64 = AtomicU64::new(0);
+
+fn flog(cat: &str, msg: &str) {
+    let _g = FLOG_LOCK.lock();
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let line = format!("{} [{}] {}\n", ts, cat, msg);
+    let _ = std::fs::create_dir_all(FLOG_DIR);
+    // 控制体积：超过 4MB 就轮转一次
+    if let Ok(m) = std::fs::metadata(FLOG_PATH) {
+        if m.len() > 4 * 1024 * 1024 {
+            let _ = std::fs::rename(FLOG_PATH, "/sdcard/Download/uma_so/log/ura.old.log");
+        }
+    }
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(FLOG_PATH)
+    {
+        let _ = f.write_all(line.as_bytes());
+        let _ = f.flush();
+    }
+    FLOG_LINES.fetch_add(1, Ordering::Relaxed);
+}
+
+/// 读日志尾部
+fn flog_tail(max_lines: usize) -> String {
+    let data = std::fs::read_to_string(FLOG_PATH).unwrap_or_default();
+    let lines: Vec<&str> = data.lines().collect();
+    let start = lines.len().saturating_sub(max_lines);
+    lines[start..].join("\n")
+}
+
 // ===== 播放倍率加速（剧情 Timeline / 训练 cut）=====
 // 全部是 static 纯函数，只返回倍率，不改总时长、不改调用时序
 static TS_ON: AtomicBool = AtomicBool::new(false);
@@ -2759,6 +2800,7 @@ unsafe fn read_scenario_detail() -> String {
     {
         let total_turn = read_obscured_int_at(sm_data_obj, 68); // _totalTurnNum
         if total_turn <= 0 {
+            flog("state", "not_in_training gate hit (summary/scenario/params)");
             return r#"{"error":"not_in_training"}"#.to_string();
         }
     }
@@ -7830,8 +7872,8 @@ fn push_loop() {
                 install_event_choice_hook();
                 install_ui_text_hook();
                 install_cutin_trace();
-                install_duration_hook();
-                install_timescale_hooks();
+                flog("init", &format!("plugin {} boot, endpoints ready", PLUGIN_VERSION));
+                // 加速功能已停用（用户要求先删）：install_duration_hook / install_timescale_hooks 不再调用
                 rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
@@ -8610,6 +8652,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/auth/clear",
             "/api/sniff/unity",
         "/api/training/anim_skip/trace",
+        "/api/log/file",
+        "/api/log/file/clear",
+        "/api/log/probe",
         "/api/speed/timescale",
         "/api/speed/timescale/on",
         "/api/speed/timescale/off",
@@ -8735,6 +8780,25 @@ fn handle_http(mut stream: std::net::TcpStream) {
             log_snapshot("data", &result);
         }
         result
+    } else if path.starts_with("/api/log/file") {
+        let n_lines = parse_query(&full_uri, "n").parse::<usize>().unwrap_or(200);
+        let tail = flog_tail(n_lines.min(2000));
+        format!(
+            r#"{{"ok":true,"path":"{}","total_written":{},"lines":{}}}"#,
+            FLOG_PATH,
+            FLOG_LINES.load(Ordering::Relaxed),
+            json_escape(&tail)
+        )
+    } else if path == "/api/log/file/clear" {
+        let _ = std::fs::remove_file(FLOG_PATH);
+        r#"{"ok":true,"cleared":true}"#.to_string()
+    } else if path.starts_with("/api/log/probe") {
+        flog("probe", "log pipeline alive");
+        format!(
+            r#"{{"ok":true,"total_written":{},"path":"{}"}}"#,
+            FLOG_LINES.load(Ordering::Relaxed),
+            FLOG_PATH
+        )
     } else if path == "/api/speed/timescale" {
         format!(
             r#"{{"ok":true,"enabled":{},"hits":{},"multiplier":{}}}"#,
@@ -12700,6 +12764,7 @@ unsafe fn call_fuzzy_string(class: *mut c_void, instance: *const c_void, substr:
 // ARM64: X0=this, X1=param
 // Read StoryChoiceParam fields: LabelText, GainId, NextBlockIndex, LoopExitGainId
 extern "C" fn event_add_choice_hook_handler(this: *mut c_void, param: *mut c_void) {
+    unsafe { flog("event", "AddChoiceButton hit"); }
     unsafe {
         if param.is_null() {
             return;
