@@ -596,18 +596,18 @@ unsafe fn install_ui_text_hook() {
         UI_TEXT_HOOK_ON.store(true, Ordering::Relaxed);
     }
 
-    // TMPro.TMP_Text.set_text（Unity 引擎类，元数据里存在）
+    // Gallop.TextMeshProUguiCommon.set_text（游戏对 TextMeshPro 的封装类）
     if !TMP_TEXT_HOOKED.load(Ordering::Relaxed) {
         let c = find_class(
             image,
-            to_cstr("TMPro").as_ptr(),
-            to_cstr("TMP_Text").as_ptr(),
+            to_cstr("Gallop").as_ptr(),
+            to_cstr("TextMeshProUguiCommon").as_ptr(),
         );
         if !c.is_null() {
             let a = find_method_addr(c, "set_text", 1);
             if a != 0
                 && install_hook_safe(
-                    "TMP_Text.set_text",
+                    "TextMeshProUguiCommon.set_text",
                     a,
                     tmp_text_set_text_hook as usize,
                     &mut ORIG_TMP_TEXT_PROLOGUE,
