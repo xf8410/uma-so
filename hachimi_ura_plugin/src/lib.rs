@@ -486,7 +486,12 @@ unsafe fn make_il2cpp_string(s: &str) -> *mut c_void {
 }
 
 // ARM64: X0=this(TextCommon), X1=value(Il2CppString*)
+static HIT_TEXTCOMMON: AtomicU64 = AtomicU64::new(0);
+static HIT_TMP: AtomicU64 = AtomicU64::new(0);
+static HIT_UITEXT: AtomicU64 = AtomicU64::new(0);
+
 extern "C" fn textcommon_set_text_hook(this: *mut c_void, value: *mut c_void) {
+    HIT_TEXTCOMMON.fetch_add(1, Ordering::Relaxed); // ★ 计数前置：证明"进了回调"
     unsafe {
         let mut out = value;
         if !value.is_null() {
@@ -542,6 +547,7 @@ unsafe fn ui_translate(value: *mut c_void) -> *mut c_void {
 
 // TMPro.TMP_Text.set_text(string)
 extern "C" fn tmp_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
+    HIT_TMP.fetch_add(1, Ordering::Relaxed);
     unsafe {
         let out = ui_translate(value);
         let tramp = interceptor_get_trampoline(tmp_text_set_text_hook as usize);
@@ -554,6 +560,7 @@ extern "C" fn tmp_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
 
 // UnityEngine.UI.Text.set_text(string)
 extern "C" fn ui_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
+    HIT_UITEXT.fetch_add(1, Ordering::Relaxed);
     unsafe {
         let out = ui_translate(value);
         let tramp = interceptor_get_trampoline(ui_text_set_text_hook as usize);
@@ -8652,6 +8659,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/auth/clear",
             "/api/sniff/unity",
         "/api/training/anim_skip/trace",
+        "/api/text/hooks",
         "/api/log/file",
         "/api/log/file/clear",
         "/api/log/probe",
@@ -8780,6 +8788,16 @@ fn handle_http(mut stream: std::net::TcpStream) {
             log_snapshot("data", &result);
         }
         result
+    } else if path == "/api/text/hooks" {
+        format!(
+            r#"{{"ok":true,"textcommon":{{"installed":{},"hits":{}}},"tmp":{{"installed":{},"hits":{}}},"uitext":{{"installed":{},"hits":{}}}}}"#,
+            UI_TEXT_HOOK_ON.load(Ordering::Relaxed),
+            HIT_TEXTCOMMON.load(Ordering::Relaxed),
+            TMP_TEXT_HOOKED.load(Ordering::Relaxed),
+            HIT_TMP.load(Ordering::Relaxed),
+            UI_TEXT_HOOKED.load(Ordering::Relaxed),
+            HIT_UITEXT.load(Ordering::Relaxed)
+        )
     } else if path.starts_with("/api/log/file") {
         let n_lines = parse_query(&full_uri, "n").parse::<usize>().unwrap_or(200);
         let tail = flog_tail(n_lines.min(2000));
@@ -11179,6 +11197,9 @@ unsafe fn install_hook_safe(
     if method_addr == 0 {
         return false;
     }
+    // ★ 移除 write_hook_bytes 兜底：手写跳转没有 trampoline 管理，
+    //   一旦 interceptor 失败就改写方法头 = 必崩。失败即不装。
+    let _ = orig_prologue; // 保留参数签名，兼容既有调用点
     if interceptor_hook(method_addr, handler_addr) {
         ura_log(
             3,
@@ -11187,12 +11208,10 @@ unsafe fn install_hook_safe(
         true
     } else {
         ura_log(
-            2,
-            &format!("{}: interceptor failed, fallback to write_hook_bytes", name),
+            1,
+            &format!("{}: interceptor FAILED at 0x{:x} (no fallback)", name, method_addr),
         );
-        std::ptr::copy_nonoverlapping(method_addr as *const u8, orig_prologue.as_mut_ptr(), 16);
-        write_hook_bytes(method_addr, handler_addr);
-        true
+        false
     }
 }
 
