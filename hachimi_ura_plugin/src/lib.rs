@@ -583,12 +583,38 @@ static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 static DUR3F_ON: AtomicBool = AtomicBool::new(false);
 static DUR3F_HITS: AtomicU64 = AtomicU64::new(0);
 static mut ORIG_DURATION_PROLOGUE: [u8; 16] = [0; 16];
-const FRAME3_SEC: f32 = 3.0 / 60.0; // 3 帧 @60fps = 0.05s
+const FRAME3_SEC: f32 = 3.0 / 60.0; // 3 帧 @60fps = 0.05s（激进，会崩）
+const DEFAULT_DUR_SEC: f32 = 0.20; // 默认 12 帧，保守
+static DUR_LAST_READ: AtomicU64 = AtomicU64::new(0);
+static DUR_VALUE_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 从 /sdcard/Download/uma_so/speed_sec.txt 读时长（秒），10 秒缓存；缺省 0.20
+fn dur_value() -> f32 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(DUR_LAST_READ.load(Ordering::Relaxed)) > 10 {
+        DUR_LAST_READ.store(now, Ordering::Relaxed);
+        let v = std::fs::read_to_string("/sdcard/Download/uma_so/speed_sec.txt")
+            .ok()
+            .and_then(|t| t.trim().parse::<f32>().ok())
+            .filter(|x| x.is_finite() && *x >= 0.05 && *x <= 3.0)
+            .unwrap_or(DEFAULT_DUR_SEC);
+        DUR_VALUE_BITS.store(v.to_bits(), Ordering::Relaxed);
+    }
+    let b = DUR_VALUE_BITS.load(Ordering::Relaxed);
+    if b == 0 {
+        DEFAULT_DUR_SEC
+    } else {
+        f32::from_bits(b)
+    }
+}
 
 extern "C" fn high_speed_duration_hook() -> f32 {
     if DUR3F_ON.load(Ordering::Relaxed) {
         DUR3F_HITS.fetch_add(1, Ordering::Relaxed);
-        return FRAME3_SEC;
+        return dur_value();
     }
     unsafe {
         let tramp = interceptor_get_trampoline(high_speed_duration_hook as usize);
@@ -8591,7 +8617,7 @@ fn handle_http(mut stream: std::net::TcpStream) {
             r#"{{"ok":true,"enabled":{},"hits":{},"frame3_sec":{}}}"#,
             DUR3F_ON.load(Ordering::Relaxed),
             DUR3F_HITS.load(Ordering::Relaxed),
-            FRAME3_SEC
+            dur_value()
         )
     } else if path == "/api/speed/duration3f/on" {
         DUR3F_ON.store(true, Ordering::Relaxed);
