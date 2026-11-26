@@ -5958,6 +5958,20 @@ unsafe fn read_summary_inner_impl() -> String {
         return r#"{"error":"no_chara"}"#.to_string();
     }
 
+    // ★ 硬校验：chara_obj 的类必须是 WorkSingleModeCharaData
+    //   门禁（_totalTurnNum>0）挡不住"对象已被释放/复用"的情况，必须核对对象头类指针
+    {
+        let expect = find_class(
+            image,
+            to_cstr("Gallop").as_ptr(),
+            to_cstr("WorkSingleModeCharaData").as_ptr(),
+        );
+        let actual = get_class_from_object(chara_obj);
+        if expect.is_null() || actual != expect {
+            log_predict_step("S:chara_class_mismatch");
+            return r#"{"error":"chara_class_mismatch"}"#.to_string();
+        }
+    }
     log_predict_step("S:before_read_speed");
     let spd = read_obscured_int_at(chara_obj, 248); // _speed
     log_predict_step("S:after_read_speed");
