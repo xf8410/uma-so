@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
-"""CI 侧补丁：把 matsuri 完整决策栈挂进 lib.rs。
+"""CI 侧补丁：把 matsuri 完整决策栈挂进 lib.rs，并接上 CommandSelector。
 
 为什么在 CI 里改而不是直接改 lib.rs：
   lib.rs 约 25k 行 / 1MB，手工整文件替换不可靠；脚本化替换每处都校验锚点命中数，
   锚点对不上就非零退出，比"悄悄没挂上"安全。
 
-本脚本做四件事：
+本脚本做五件事：
   1. `mod matsuri_bridge;`（cfg(feature="matsuri")）
   2. 注入 `build_matsuri_frame()`：从游戏内存直接读全字段，拼 matsuri 在线帧
-     （thisTurn.json 形状：festa + baseGame + baseGame.training）
-  3. ENDPOINTS 注册 /api/ai/{status,init,frame,decide}
-  4. 路由分支
+  3. 注入 CommandSelector 接线：hook `FestaCommandSelector.SelectTraining`
+  4. ENDPOINTS 注册 /api/ai/{status,hooks,init,frame,decide}
+  5. 路由分支 + 在游戏初始化回调里装 hook
 
 为什么必须挂 /api/ai/decide：
   `matsuri_bridge::decide` 没有调用者时，LTO 会把整条决策链
   （ParsedFrame::parse → MatsuriGame::restore → route → Trainer → value 打分）
-  当死代码删掉，产物里只剩数据表和 OnlineSession::new 的构造路径。
-  实测判据：strip 后 `handle_frame` / `bridge_not_initialized` 这些串消失。
-  所以四个端点一个都不能省。
+  当死代码删掉。实测判据：strip 后 `handle_frame` / `候选动作为空` / `帧解析失败`
+  这些串消失（b17682bf 就是这样，2253aec0 才补回来）。
+
+接线纪律：
+  - hook 内只记录（this / arg / 返回值原始位），不做决策、不阻塞游戏线程；
+  - 决策由 /api/ai/decide 按需触发，避免 auto-play 的轮询里跑 100~800ms 的搜索；
+  - 返回值语义（训练 index 还是 ActionInfo 指针）尚未定死，本版不替改返回值，
+    只把「原生选择」与「matsuri 选择」并排记下来，等语义确认后再开写回。
 
 锚点清单（改 lib.rs 结构时必须同步）：
-  1. `mod ui_rename;`                       模块声明区
-  2. `    "/scenario",`                     const ENDPOINTS 首条
-  3. `    } else if path == "/scenario" {`  请求路由链
-  4. `unsafe fn read_summary_inner() -> String {`  注入帧构造函数的落点
+  1. `mod ui_rename;`
+  2. `unsafe fn read_summary_inner() -> String {`
+  3. `    "/scenario",`
+  4. `    } else if path == "/scenario" {`
+  5. `                install_training_hook();`（16 空格，push 探活分支）
+  6. `        install_training_hook();`（8 空格，on_game_initialized 分支）
 """
 
 import sys
@@ -149,10 +156,7 @@ unsafe fn build_matsuri_frame() -> String {
     let (camp_remain, max_act_level) = if fi.is_null() {
         (0, 10)
     } else {
-        (
-            read_obscured_int_at(fi, 16),
-            read_obscured_int_at(fi, 36),
-        )
+        (read_obscured_int_at(fi, 16), read_obscured_int_at(fi, 36))
     };
 
     // ActInfoArray(+48)：演目五条
@@ -260,6 +264,91 @@ unsafe fn build_matsuri_frame() -> String {
         training.join(",")
     )
 }
+
+// ===== CommandSelector 接线 =====
+//
+// FestaCommandSelector.SelectTraining 实测（/il2cpp/disassemble，addr 0x787806760c）：
+//   入口 `mov x19, x1`  → x1 是唯一参数（IL2CPP 实例方法 x0=this）
+//   调用目标前 `mov x1, x19; mov x2, xzr`
+//   尾部 `mov x0, x20` → 返回值在 x0
+// 所以签名取 (this: *mut c_void, arg0: i64) -> u64。
+//
+// 本版只观测不写回：返回值到底是训练 index 还是 ActionInfo 指针尚未定死，
+// 猜错就是 SIGSEGV。先把「原生选了什么」和「matsuri 选了什么」并排记下来。
+static SEL_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEL_INSTALLED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+static SEL_THIS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEL_ARG: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(-1);
+static SEL_RET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEL_ADDR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEL_ERR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+extern "C" fn select_training_hook(this: *mut c_void, arg0: i64) -> u64 {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        SEL_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        SEL_THIS.store(this as u64, std::sync::atomic::Ordering::Relaxed);
+        SEL_ARG.store(arg0, std::sync::atomic::Ordering::Relaxed);
+        let trampoline = interceptor_get_trampoline(select_training_hook as usize);
+        if trampoline == 0 {
+            SEL_ERR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return 0u64;
+        }
+        type FnType = unsafe extern "C" fn(*mut c_void, i64) -> u64;
+        let original: FnType = std::mem::transmute(trampoline);
+        let ret = original(this, arg0);
+        SEL_RET.store(ret, std::sync::atomic::Ordering::Relaxed);
+        ret
+    }))
+    .unwrap_or(0)
+}
+
+unsafe fn install_selector_hooks() -> String {
+    if SEL_INSTALLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return "already".to_string();
+    }
+    if API.is_null() {
+        return "api_null".to_string();
+    }
+    let image = get_image();
+    if image.is_null() {
+        return "image_null".to_string();
+    }
+    let class = find_class_by_short_name(image, "FestaCommandSelector");
+    if class.is_null() {
+        return "class_not_found".to_string();
+    }
+    let addr = find_method_addr(class, "SelectTraining", 1);
+    if addr == 0 {
+        return "method_not_found".to_string();
+    }
+    SEL_ADDR.store(addr as u64, std::sync::atomic::Ordering::Relaxed);
+    if interceptor_hook(addr, select_training_hook as usize) {
+        SEL_INSTALLED.store(true, std::sync::atomic::Ordering::Relaxed);
+        ura_log(
+            3,
+            &format!("selector hook: SelectTraining hooked at 0x{:x}", addr),
+        );
+        format!("hooked@0x{:x}", addr)
+    } else {
+        ura_log(1, "selector hook: interceptor_hook failed");
+        "hook_failed".to_string()
+    }
+}
+
+fn selector_hooks_json() -> String {
+    use std::sync::atomic::Ordering::Relaxed;
+    format!(
+        r#"{{"installed":{},"addr":"0x{:x}","hits":{},"trampoline_miss":{},"last_this":"0x{:x}","last_arg":{},"last_ret":"0x{:x}"}}"#,
+        SEL_INSTALLED.load(Relaxed),
+        SEL_ADDR.load(Relaxed),
+        SEL_HITS.load(Relaxed),
+        SEL_ERR.load(Relaxed),
+        SEL_THIS.load(Relaxed),
+        SEL_ARG.load(Relaxed),
+        SEL_RET.load(Relaxed)
+    )
+}
 '''
 
 ROUTES = r'''    } else if path == "/api/ai/status" {
@@ -271,6 +360,10 @@ ROUTES = r'''    } else if path == "/api/ai/status" {
         {
             r#"{"ok":false,"error":"matsuri_feature_off"}"#.to_string()
         }
+    } else if path == "/api/ai/hooks" {
+        let hooks = selector_hooks_json();
+        let install = unsafe { install_selector_hooks() };
+        format!(r#"{{"ok":true,"install":"{}","selector":{}}}"#, install, hooks)
     } else if path == "/api/ai/init" {
         #[cfg(feature = "matsuri")]
         {
@@ -339,7 +432,7 @@ ROUTES = r'''    } else if path == "/api/ai/status" {
                             .collect::<Vec<_>>()
                             .join(",");
                         format!(
-                            r#"{{"ok":true,"turn":{},"epoch":{},"kind":"{}","chosen":{},"desc":"{}","note":"{}","candidates":{},"search_backed":{},"scores":[{}],"elapsed_ms":{}}}"#,
+                            r#"{{"ok":true,"turn":{},"epoch":{},"kind":"{}","chosen":{},"desc":"{}","note":"{}","candidates":{},"search_backed":{},"scores":[{}],"elapsed_ms":{},"native":{}}}"#,
                             d.turn,
                             d.epoch,
                             d.kind,
@@ -349,7 +442,8 @@ ROUTES = r'''    } else if path == "/api/ai/status" {
                             d.candidate_n,
                             d.search_backed,
                             scores,
-                            t0.elapsed().as_millis()
+                            t0.elapsed().as_millis(),
+                            selector_hooks_json()
                         )
                     }
                     Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, e.replace('"', "'")),
@@ -361,6 +455,21 @@ ROUTES = r'''    } else if path == "/api/ai/status" {
             r#"{"ok":false,"error":"matsuri_feature_off"}"#.to_string()
         }
 '''
+
+INSTALL_CALLS = [
+    (
+        "                install_training_hook();\n                install_exec_training_hook();",
+        "                install_training_hook();\n"
+        "                install_selector_hooks();\n"
+        "                install_exec_training_hook();",
+    ),
+    (
+        "        install_training_hook();\n        install_exec_training_hook();",
+        "        install_training_hook();\n"
+        "        install_selector_hooks();\n"
+        "        install_exec_training_hook();",
+    ),
+]
 
 
 def _fail(msg: str) -> int:
@@ -382,7 +491,7 @@ def main() -> int:
         1,
     )
 
-    # ---- 2) 注入帧构造函数（放在 read_summary_inner 之前）----
+    # ---- 2) 注入帧构造 + selector 接线 ----
     anchor = "unsafe fn read_summary_inner() -> String {"
     if s.count(anchor) != 1:
         return _fail(f"anchor read_summary_inner count={s.count(anchor)}")
@@ -395,7 +504,7 @@ def main() -> int:
     s = s.replace(
         anchor,
         anchor
-        + '\n    "/api/ai/status",\n    "/api/ai/init",'
+        + '\n    "/api/ai/status",\n    "/api/ai/hooks",\n    "/api/ai/init",'
           '\n    "/api/ai/frame",\n    "/api/ai/decide",',
         1,
     )
@@ -406,13 +515,22 @@ def main() -> int:
         return _fail(f"route anchor count={s.count(anchor)}")
     s = s.replace(anchor, ROUTES + anchor, 1)
 
+    # ---- 5) 游戏初始化时装 hook ----
+    for old, new in INSTALL_CALLS:
+        n = s.count(old)
+        if n != 1:
+            return _fail(f"install anchor count={n} for {old[:40]!r}")
+        s = s.replace(old, new, 1)
+
     open(PATH, "w", encoding="utf-8").write(s)
     print(f"patched {PATH}: {before} -> {len(s)} bytes")
     for needle in (
         "mod matsuri_bridge",
         "fn build_matsuri_frame",
-        "/api/ai/frame",
+        "fn install_selector_hooks",
+        "fn select_training_hook",
         "/api/ai/decide",
+        "/api/ai/hooks",
     ):
         hits = sum(1 for line in s.splitlines() if needle in line)
         print(f"  {needle}: {hits} line(s)")
