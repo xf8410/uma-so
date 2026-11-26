@@ -66,12 +66,17 @@ jobs:
           grep -rn "default-features = false" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
           sed -i -E "s/(=[[:space:]]*\{ *workspace *= *true *), *default-features *= *false/\1/" vendor/matsuri/umaai_next/crates/*/Cargo.toml
           grep -rn "default-features" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
-      - name: patch lib.rs (挂 matsuri_bridge 与两个端点)
+      - name: patch lib.rs (matsuri_bridge + 帧构造 + selector hook)
         working-directory: hachimi_ura_plugin
         run: |
-          python3 ci_patch.py 2>&1 | tee /tmp/patch.log
+          python3 ci_patch.py
+          python3 ci_patch2.py
+          echo "--- 锚点落地检查 ---"
           grep -n "mod matsuri_bridge" src/lib.rs
-          grep -n "api/ai/init" src/lib.rs | head -3
+          grep -n "fn build_matsuri_frame" src/lib.rs
+          grep -n "fn dump_omakase_dict" src/lib.rs
+          grep -n "fn install_selector_hooks" src/lib.rs
+          grep -c "api/ai/" src/lib.rs
       - name: build
         working-directory: hachimi_ura_plugin
         run: |
@@ -89,8 +94,7 @@ jobs:
           ls -la "$SO"
           sha256sum "$SO"
           SIZE=$(stat -c%s "$SO")
-          echo "so_size=$SIZE" > /tmp/size.txt
-          echo "so_size=$SIZE"
+          echo "so_size=$SIZE" | tee /tmp/size.txt
       - name: verify（只看真正会进产物的字符串）
         working-directory: hachimi_ura_plugin
         run: |
@@ -100,23 +104,29 @@ jobs:
           {
             echo "so_size=$SIZE"
             echo "gamedata_bytes=$(du -sb ../vendor/gamedata | cut -f1)"
-            echo "scenario_json_bytes=$(stat -c%s ../vendor/matsuri/data/scenario_matsuri.json)"
           } | tee /tmp/size.txt
-          for k in api/ai/status api/ai/init matsuri_data; do
+          for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks api/ai/weights matsuri_data; do
             if grep -aq "$k" "$SO"; then
               echo "found: $k"
             else
-              echo "::error::未找到 $k —— 该功能没进产物"
+              echo "::error::未找到 $k —— 该端点没进产物"
               exit 1
             fi
           done
-          if [ "${{ inputs.with_matsuri }}" != "false" ]; then
-            if [ "$SIZE" -lt 9000000 ]; then
-              echo "::error::so 只有 $SIZE 字节（预期 >9MB：原 4.9MB + 内嵌 gamedata）—— 决策栈/数据没链接进来"
+          # 决策链是否真在：b17682bf 这几项全为 0
+          for k in handle_frame 候选动作为空 帧解析失败 dump_omakase_dict; do
+            if grep -aq "$k" "$SO"; then
+              echo "found: $k"
+            else
+              echo "::error::未找到 $k —— 决策链/权重探测被 LTO 裁掉"
               exit 1
             fi
+          done
+          if [ "${{ inputs.with_matsuri }}" != "false" ] && [ "$SIZE" -lt 9000000 ]; then
+            echo "::error::so 只有 $SIZE 字节（预期 >9MB）—— 决策栈没链接进来"
+            exit 1
           fi
-      - name: dump error to repo（失败时把日志落到 docs/，供离线阅读）
+      - name: dump error to repo（失败时把日志落到 docs/）
         if: failure()
         run: |
           set +e
@@ -126,13 +136,9 @@ jobs:
             echo "- run: ${{ github.run_id }}"
             echo "- sha: ${{ github.sha }}"
             echo
-            echo '## 大小与环境'
+            echo '## 大小'
             echo '```'
             cat /tmp/size.txt 2>/dev/null
-            echo '```'
-            echo '## patch 输出'
-            echo '```'
-            head -40 /tmp/patch.log 2>/dev/null
             echo '```'
             echo '## cargo error 行'
             echo '```'
