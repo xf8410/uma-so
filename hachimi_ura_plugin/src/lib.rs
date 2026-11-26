@@ -431,6 +431,50 @@ unsafe fn ui_zh_lookup(s: &str) -> Option<&'static str> {
     None
 }
 
+/// 中文串缓存：首次创建时登记 GC handle 保活，避免 il2cpp_string_new 造出的
+/// 托管串被 GC 回收后再被游戏使用 → "Invalid address passed to free"（本次闪退）
+static ZH_CACHE: std::sync::Mutex<Vec<(String, usize)>> = std::sync::Mutex::new(Vec::new());
+static UI_ZH_ON: AtomicBool = AtomicBool::new(true);
+static UI_ZH_LAST_CHECK: AtomicU64 = AtomicU64::new(0);
+
+/// 开关：/sdcard/Download/uma_so/ui_zh.txt 内容 off 即停用（10 秒缓存）
+fn ui_zh_enabled() -> bool {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(UI_ZH_LAST_CHECK.load(Ordering::Relaxed)) > 10 {
+        UI_ZH_LAST_CHECK.store(now, Ordering::Relaxed);
+        if let Ok(v) = std::fs::read_to_string("/sdcard/Download/uma_so/ui_zh.txt") {
+            UI_ZH_ON.store(!v.trim().eq_ignore_ascii_case("off"), Ordering::Relaxed);
+        }
+    }
+    UI_ZH_ON.load(Ordering::Relaxed)
+}
+
+unsafe fn zh_string_keepalive(zh: &str) -> *mut c_void {
+    if let Ok(mut c) = ZH_CACHE.lock() {
+        for (k, p) in c.iter() {
+            if k == zh {
+                return *p as *mut c_void;
+            }
+        }
+        let raw = make_il2cpp_string(zh);
+        if raw.is_null() {
+            return raw;
+        }
+        let g = resolve_il2cpp_symbol("il2cpp_gchandle_new");
+        if !g.is_null() {
+            let f: unsafe extern "C" fn(*mut c_void, bool) -> u32 = std::mem::transmute(g);
+            let _h = f(raw, false); // 长期持有，不释放：条目数 = 映射表条数
+        }
+        c.push((zh.to_string(), raw as usize));
+        raw
+    } else {
+        make_il2cpp_string(zh)
+    }
+}
+
 unsafe fn make_il2cpp_string(s: &str) -> *mut c_void {
     let p = resolve_il2cpp_symbol("il2cpp_string_new");
     if p.is_null() {
@@ -453,10 +497,12 @@ extern "C" fn textcommon_set_text_hook(this: *mut c_void, value: *mut c_void) {
                         v.push(s.clone());
                     }
                 }
-                if let Some(zh) = ui_zh_lookup(&s) {
-                    let ns = make_il2cpp_string(zh);
-                    if !ns.is_null() {
-                        out = ns;
+                if ui_zh_enabled() {
+                    if let Some(zh) = ui_zh_lookup(&s) {
+                        let ns = zh_string_keepalive(zh);
+                        if !ns.is_null() {
+                            out = ns;
+                        }
                     }
                 }
             }
