@@ -68,7 +68,7 @@ jobs:
       - name: patch lib.rs (挂 matsuri_bridge 与两个端点)
         working-directory: hachimi_ura_plugin
         run: |
-          python3 ci_patch.py
+          python3 ci_patch.py 2>&1 | tee /tmp/patch.log
           grep -n "mod matsuri_bridge" src/lib.rs
           grep -n "api/ai/init" src/lib.rs | head -3
       - name: build
@@ -81,9 +81,7 @@ jobs:
           RC=$?
           echo "cargo exit=$RC log_lines=$(wc -l < /tmp/build.log)"
           if [ $RC -ne 0 ]; then
-            LN=$(grep -nE "^error" /tmp/build.log | head -1 | cut -d: -f1)
-            echo "first_error=${LN:-none}"
-            if [ -n "$LN" ]; then awk -v s="$LN" 'NR>=s-1 && NR<=s+30' /tmp/build.log; else tail -60 /tmp/build.log; fi
+            grep -nE "^error" /tmp/build.log | head -40
             exit 1
           fi
           ls -la target/aarch64-linux-android/release/libhachimi_ura.so
@@ -95,7 +93,6 @@ jobs:
               echo "::error::so 只有 $SIZE 字节 —— matsuri 决策栈没被链接进来（内嵌数据约 7MB）"
               exit 1
             fi
-            echo "--- 关键字符串自检 ---"
             for k in scenario_matsuri matsuri_bridge api/ai/status; do
               if grep -aq "$k" target/aarch64-linux-android/release/libhachimi_ura.so; then
                 echo "found: $k"
@@ -105,7 +102,36 @@ jobs:
               fi
             done
           fi
+      - name: dump error to repo（失败时把日志落到 docs/，供离线阅读）
+        if: failure()
+        run: |
+          set +e
+          {
+            echo "# CI 最近一次失败日志"
+            echo
+            echo "- run: ${{ github.run_id }}"
+            echo "- sha: ${{ github.sha }}"
+            echo
+            echo '## patch 输出'
+            echo '```'
+            head -60 /tmp/patch.log 2>/dev/null
+            echo '```'
+            echo '## cargo error 行'
+            echo '```'
+            grep -nE "^error|^warning: unused|error\[E" /tmp/build.log 2>/dev/null | head -60
+            echo '```'
+            echo '## cargo 日志尾部'
+            echo '```'
+            tail -120 /tmp/build.log 2>/dev/null
+            echo '```'
+          } > docs/CI_LAST_ERROR.md
+          git config user.name "ci-bot"
+          git config user.email "ci@local"
+          git add docs/CI_LAST_ERROR.md
+          git commit -m "ci: 记录失败日志 ${GITHUB_SHA:0:8}" || true
+          git push || true
       - name: publish
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
