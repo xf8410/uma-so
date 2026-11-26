@@ -3,7 +3,7 @@
 
 为什么在 CI 里改而不是直接改 lib.rs：
   lib.rs 约 25k 行 / 1MB，手工整文件替换不可靠；脚本化替换每处都校验锚点命中数，
-  锚点对不上就退出非零，比"悄悄没挂上"安全。三处锚点任一变化都必须先修本脚本。
+  锚点对不上就非零退出，比"悄悄没挂上"安全。三处锚点任一变化都必须先修本脚本。
 
 用法（在 hachimi_ura_plugin/ 下）：
     python3 ci_patch.py
@@ -14,6 +14,11 @@ import sys
 PATH = "src/lib.rs"
 
 
+def _fail(msg: str) -> int:
+    print(f"::error::ci_patch: {msg}")
+    return 1
+
+
 def main() -> int:
     s = open(PATH, encoding="utf-8").read()
     before = len(s)
@@ -21,9 +26,7 @@ def main() -> int:
     # ---- 1) 模块声明 ----
     anchor = "mod ui_rename;"
     if s.count(anchor) != 1:
-        return f"anchor 'mod ui_rename;' count={s.count(anchor)}".__len__() and _fail(
-            f"anchor 'mod ui_rename;' count={s.count(anchor)}"
-        )
+        return _fail(f"anchor 'mod ui_rename;' count={s.count(anchor)}")
     s = s.replace(
         anchor,
         anchor + '\n#[cfg(feature = "matsuri")]\nmod matsuri_bridge;',
@@ -106,11 +109,6 @@ def main() -> int:
         if hits == 0:
             return _fail(f"{needle} 补丁后仍不存在")
     return 0
-
-
-def _fail(msg: str) -> int:
-    print(f"::error::ci_patch: {msg}")
-    return 1
 
 
 if __name__ == "__main__":
