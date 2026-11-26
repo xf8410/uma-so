@@ -2891,6 +2891,94 @@ unsafe fn read_scenario_detail() -> String {
             if !dataset_class.is_null() {
                 result_parts.push(format!(r#""dataset_class":"{}""#, dataset_class_name));
 
+                // ★ Festa(15) 结构与数值快照
+                if scenario_id == 15 {
+                    // FestaInfo +16
+                    let fi = read_ptr_at(dataset_obj, 16);
+                    let (camp, maxlv, step) = if fi.is_null() {
+                        (-1, -1, -1)
+                    } else {
+                        (
+                            read_obscured_int_at(fi, 16),
+                            read_obscured_int_at(fi, 36),
+                            read_obscured_int_at(fi, 56),
+                        )
+                    };
+                    result_parts.push(format!(
+                        r#""festa_info":{{"campRemain":{},"maxActLevel":{},"actTrainingStep":{}}}"#,
+                        camp, maxlv, step
+                    ));
+
+                    // ActInfoArray +48
+                    let acts_arr = read_ptr_at(dataset_obj, 48);
+                    let mut acts: Vec<String> = Vec::new();
+                    for i in 0..seq_len(acts_arr).min(8) {
+                        let e = seq_item(acts_arr, i);
+                        if e.is_null() {
+                            continue;
+                        }
+                        acts.push(format!(
+                            r#"{{"actType":{},"gauge":{},"level":{},"needGauge":{},"trainState":{},"adviceId":{},"friendOutingLv":{}}}"#,
+                            read_obscured_int_at(e, 16),
+                            read_obscured_int_at(e, 36),
+                            read_obscured_int_at(e, 56),
+                            read_obscured_int_at(e, 76),
+                            read_obscured_int_at(e, 96),
+                            read_obscured_int_at(e, 116),
+                            read_obscured_int_at(e, 136)
+                        ));
+                    }
+                    result_parts.push(format!(r#""festa_acts":[{}]"#, acts.join(",")));
+
+                    // CommandInfoArray +24
+                    let cmds_arr = read_ptr_at(dataset_obj, 24);
+                    let mut cmds: Vec<String> = Vec::new();
+                    for i in 0..seq_len(cmds_arr).min(14) {
+                        let e = seq_item(cmds_arr, i);
+                        if e.is_null() {
+                            continue;
+                        }
+                        let ctype = read_obscured_int_at(e, 16);
+                        let cid = read_obscured_int_at(e, 36);
+                        // 收益 +56 (ParamsIncDecInfo: Value@16, BonusValue@36)
+                        let garr = read_ptr_at(e, 56);
+                        let mut gains: Vec<String> = Vec::new();
+                        for j in 0..seq_len(garr).min(10) {
+                            let ge = seq_item(garr, j);
+                            if ge.is_null() {
+                                continue;
+                            }
+                            gains.push(format!(
+                                r#"{{"value":{},"bonus":{}}}"#,
+                                read_obscured_int_at(ge, 16),
+                                read_obscured_int_at(ge, 36)
+                            ));
+                        }
+                        // 演目 gauge 预测 +64 (ActType@16, GainActGauge@36)
+                        let parr = read_ptr_at(e, 64);
+                        let mut pg: Vec<String> = Vec::new();
+                        for j in 0..seq_len(parr).min(8) {
+                            let pe = seq_item(parr, j);
+                            if pe.is_null() {
+                                continue;
+                            }
+                            pg.push(format!(
+                                r#"{{"actType":{},"gain":{}}}"#,
+                                read_obscured_int_at(pe, 16),
+                                read_obscured_int_at(pe, 36)
+                            ));
+                        }
+                        cmds.push(format!(
+                            r#"{{"type":{},"id":{},"gains":[{}],"actGauge":[{}]}}"#,
+                            ctype,
+                            cid,
+                            gains.join(","),
+                            pg.join(",")
+                        ));
+                    }
+                    result_parts.push(format!(r#""festa_cmds":[{}]"#, cmds.join(",")));
+                }
+
                 // ★ Read int-type DataSet getters (CY uses ObscuredInt for everything)
                 let int_getters = [
                     "get_TeamRank",
@@ -4812,6 +4900,24 @@ const TEXT_DATA_CATEGORY_SKILL_NAME: i32 = 47; // text_data.category=47: skill n
 const IL2CPP_LIST_COUNT_OFF: usize = 0x18; // Il2CppList._count (il2cpp internal, all List<T>)
 const IL2CPP_LIST_ITEMS_OFF: usize = 0x20; // Il2CppList._items[0] start (il2cpp internal, all List<T>)
 const IL2CPP_LIST_ITEM_SIZE: usize = 0x08; // sizeof(pointer) on aarch64
+
+/// 数组/List 长度（@+0x18）
+unsafe fn seq_len(p: *const c_void) -> usize {
+    if p.is_null() {
+        return 0;
+    }
+    std::ptr::read_unaligned::<usize>((p as *const u8).add(IL2CPP_LIST_COUNT_OFF) as *const usize)
+}
+
+/// 引用型序列的第 i 个元素指针（@+0x20 + i*8）
+unsafe fn seq_item(p: *const c_void, i: usize) -> *mut c_void {
+    if p.is_null() {
+        return std::ptr::null_mut();
+    }
+    std::ptr::read_unaligned::<*mut c_void>(
+        (p as *const u8).add(IL2CPP_LIST_ITEMS_OFF + i * IL2CPP_LIST_ITEM_SIZE) as *const *mut c_void,
+    )
+}
 const IL2CPP_OBSCURED_INT_KEY_OFF: usize = 0x10; // ObscuredInt.currentCryptoKey (boxed layout)
 const IL2CPP_OBSCURED_INT_HIDDEN_OFF: usize = 0x14; // ObscuredInt.hiddenValue (boxed layout)
 const IL2CPP_UNBOX_FIRST_FIELD: usize = 0x10; // Unbox() result: first field offset (after Il2CppObject header 0x10)
