@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""CI 侧补丁：把 matsuri_bridge 挂进 lib.rs（mod 声明 + ENDPOINTS + 两个路由分支）。
+"""CI 侧补丁：把 matsuri_bridge 挂进 lib.rs（mod 声明 + ENDPOINTS + 路由分支）。
 
 为什么在 CI 里改而不是直接改 lib.rs：
   lib.rs 约 25k 行 / 1MB，手工整文件替换不可靠；脚本化替换每处都校验锚点命中数，
   锚点对不上就非零退出，比"悄悄没挂上"安全。三处锚点任一变化都必须先修本脚本。
 
-用法（在 hachimi_ura_plugin/ 下）：
-    python3 ci_patch.py
-
 锚点清单（改动 lib.rs 结构时必须同步）：
   1. `mod ui_rename;`                       —— 模块声明区末尾
   2. `    "/scenario",`                     —— const ENDPOINTS 里的首条（第一处命中）
   3. `    } else if path == "/scenario" {`  —— 请求路由链
+
+关于 /api/ai/decide 为什么必须有：
+  `matsuri_bridge::decide` 若没有调用者，LTO 会把整条决策链
+  （ParsedFrame::parse → MatsuriGame::restore → route → Trainer::select_action → value 打分）
+  全部当死代码删掉，产物里只剩数据表和 OnlineSession::new 的构造路径。
+  判据：strip 后 `handle_frame` / `bridge_not_initialized` 这些串消失。
+  所以 decide 必须挂到端点上，算法才会真的留在 .so 里。
 """
 
 import sys
@@ -44,7 +48,8 @@ def main() -> int:
         return _fail("anchor ENDPOINTS '\"/scenario\",' missing")
     s = s.replace(
         anchor,
-        anchor + '\n    "/api/ai/status",\n    "/api/ai/init",',
+        anchor
+        + '\n    "/api/ai/status",\n    "/api/ai/init",\n    "/api/ai/decide",',
         1,
     )
 
@@ -103,12 +108,57 @@ def main() -> int:
         {
             r#"{"ok":false,"error":"matsuri_feature_off"}"#.to_string()
         }
+    } else if path == "/api/ai/decide" {
+        #[cfg(feature = "matsuri")]
+        {
+            // 帧来源：/sdcard/Download/uma_so/frame.json（thisTurn.json 原样丢进去）
+            //   —— 这一步是决策链的入口，缺它整条算法会被 LTO 裁掉
+            let t0 = std::time::Instant::now();
+            match std::fs::read_to_string("/sdcard/Download/uma_so/frame.json") {
+                Ok(frame) => match matsuri_bridge::decide(&frame) {
+                    Ok(d) => {
+                        let scores = d
+                            .scores
+                            .iter()
+                            .map(|(i, v)| format!(r#"{{"i":{},"v":{:.3}}}"#, i, v))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        format!(
+                            r#"{{"ok":true,"turn":{},"epoch":{},"kind":"{}","chosen":{},"desc":"{}","note":"{}","candidates":{},"search_backed":{},"scores":[{}],"elapsed_ms":{}}}"#,
+                            d.turn,
+                            d.epoch,
+                            d.kind,
+                            d.chosen,
+                            d.action_desc.replace('"', "'"),
+                            d.note.replace('"', "'"),
+                            d.candidate_n,
+                            d.search_backed,
+                            scores,
+                            t0.elapsed().as_millis()
+                        )
+                    }
+                    Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, e.replace('"', "'")),
+                },
+                Err(e) => {
+                    format!(r#"{{"ok":false,"error":"read frame.json: {}"}}"#, e)
+                }
+            }
+        }
+        #[cfg(not(feature = "matsuri"))]
+        {
+            r#"{"ok":false,"error":"matsuri_feature_off"}"#.to_string()
+        }
 """
     s = s.replace(anchor, block + anchor, 1)
 
     open(PATH, "w", encoding="utf-8").write(s)
     print(f"patched {PATH}: {before} -> {len(s)} bytes")
-    for needle in ("mod matsuri_bridge", "/api/ai/status", "/api/ai/init"):
+    for needle in (
+        "mod matsuri_bridge",
+        "/api/ai/status",
+        "/api/ai/init",
+        "/api/ai/decide",
+    ):
         hits = sum(1 for line in s.splitlines() if needle in line)
         print(f"  {needle}: {hits} line(s)")
         if hits == 0:
