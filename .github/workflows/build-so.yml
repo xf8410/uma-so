@@ -66,7 +66,7 @@ jobs:
           grep -rn "default-features = false" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
           sed -i -E "s/(=[[:space:]]*\{ *workspace *= *true *), *default-features *= *false/\1/" vendor/matsuri/umaai_next/crates/*/Cargo.toml
           grep -rn "default-features" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
-      - name: patch lib.rs (matsuri_bridge + 帧构造 + selector hook)
+      - name: patch lib.rs (matsuri_bridge + 帧构造 + hook 接线)
         working-directory: hachimi_ura_plugin
         run: |
           python3 ci_patch.py
@@ -74,9 +74,10 @@ jobs:
           echo "--- 锚点落地检查 ---"
           grep -n "mod matsuri_bridge" src/lib.rs
           grep -n "fn build_matsuri_frame" src/lib.rs
+          grep -n "fn dump_omakase_tables" src/lib.rs
           grep -n "fn dump_omakase_dict" src/lib.rs
           grep -n "fn install_selector_hooks" src/lib.rs
-          grep -c "api/ai/" src/lib.rs
+          grep -n "fn install_weight_hook" src/lib.rs
       - name: build
         working-directory: hachimi_ura_plugin
         run: |
@@ -95,7 +96,7 @@ jobs:
           sha256sum "$SO"
           SIZE=$(stat -c%s "$SO")
           echo "so_size=$SIZE" | tee /tmp/size.txt
-      - name: verify（只看真正会进产物的字符串）
+      - name: verify（只查真正会进 .rodata 的字符串）
         working-directory: hachimi_ura_plugin
         run: |
           set -e
@@ -105,27 +106,33 @@ jobs:
             echo "so_size=$SIZE"
             echo "gamedata_bytes=$(du -sb ../vendor/gamedata | cut -f1)"
           } | tee /tmp/size.txt
-          for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks api/ai/weights matsuri_data; do
-            if grep -aq "$k" "$SO"; then
-              echo "found: $k"
-            else
-              echo "::error::未找到 $k —— 该端点没进产物"
-              exit 1
-            fi
+
+          echo "--- 端点字面量（路由/ENDPOINTS 里，必留）---"
+          for k in api/ai/status api/ai/init api/ai/frame api/ai/decide \
+                   api/ai/hooks api/ai/weights api/ai/tables api/ai/weightcalls \
+                   matsuri_data; do
+            grep -aq "$k" "$SO" || { echo "::error::缺端点字面量 $k"; exit 1; }
+            echo "ok: $k"
           done
-          # 决策链是否真在：b17682bf 这几项全为 0
-          for k in handle_frame 候选动作为空 帧解析失败 dump_omakase_dict; do
-            if grep -aq "$k" "$SO"; then
-              echo "found: $k"
-            else
-              echo "::error::未找到 $k —— 决策链/权重探测被 LTO 裁掉"
-              exit 1
-            fi
+
+          echo "--- 决策链判据（b17682bf 这几项全为 0，被 LTO 裁掉）---"
+          for k in handle_frame 候选动作为空 帧解析失败 不是骏大祭的帧; do
+            grep -aq "$k" "$SO" || { echo "::error::决策链被裁: $k"; exit 1; }
+            echo "ok: $k"
           done
+
+          echo "--- 权重层判据（错误串，不是符号名，strip 后仍在）---"
+          for k in omakase_command_null dict_null no_mdm_singleton \
+                   weight\ hook trampoline_miss; do
+            grep -aq "$k" "$SO" || { echo "::error::权重层被裁: $k"; exit 1; }
+            echo "ok: $k"
+          done
+
           if [ "${{ inputs.with_matsuri }}" != "false" ] && [ "$SIZE" -lt 9000000 ]; then
             echo "::error::so 只有 $SIZE 字节（预期 >9MB）—— 决策栈没链接进来"
             exit 1
           fi
+          echo "verify passed: $SIZE bytes"
       - name: dump error to repo（失败时把日志落到 docs/）
         if: failure()
         run: |
@@ -146,7 +153,7 @@ jobs:
             echo '```'
             echo '## cargo 日志尾部'
             echo '```'
-            tail -80 /tmp/build.log 2>/dev/null
+            tail -60 /tmp/build.log 2>/dev/null
             echo '```'
           } > docs/CI_LAST_ERROR.md
           git config user.name "ci-bot"
