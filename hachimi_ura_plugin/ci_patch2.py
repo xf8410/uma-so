@@ -134,31 +134,48 @@ unsafe fn dump_omakase_dict() -> String {
 //   地址 0x7878098320（本次构建）
 //   入口 `mov w19, w1`（arg0 = i32）、`mov x20, x0`（this）
 //   出口 x0/w0，ret_offsets [152]
-// 只记录 arg0 → 返回值 的对应关系，不替改。用于建立
+// 只记录 arg0 → 返回值，不替改。用于建立
 // 「commandIdType → 训练/休息/外出/比赛」映射，再决定怎么喂 matsuri 分。
 static WB_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WB_ERR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WB_ADDR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WB_INSTALLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-/// 最近 16 次调用的 (arg0, ret)，按 [arg, ret, arg, ret, ...] 交替存放
+
+/// 最近 16 次调用，[arg, ret] 交替；-999 = 空槽
 static WB_LOG: [std::sync::atomic::AtomicI64; 32] = [
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
-    std::sync::atomic::AtomicI64::new(-999); std::sync::atomic::AtomicI64::new(-999);
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
+    std::sync::atomic::AtomicI64::new(-999),
 ];
 
 extern "C" fn get_base_weight_hook(this: *mut c_void, arg0: i32) -> i32 {
