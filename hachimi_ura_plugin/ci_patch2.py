@@ -1,39 +1,35 @@
 #!/usr/bin/env python3
-"""CI 侧补丁 2：omakase 权重层接入。
+"""CI 侧补丁 2：omakase 权重层接入（只读）。
 
-两个落点，都只读、不替改数值：
+层级（全部实测，来自 /debug/dumpclass 与 /il2cpp/disassemble）：
 
-A. `/api/ai/weights` —— 静态表探测
-   Gallop.MasterDataManager（singleton=true, f=643）
-     +3208 masterOmakaseCommand → MasterOmakaseCommand
-                                    +24 _lazyPrimaryKeyDictionary
-                                         Dictionary<Int32, OmakaseCommand>
-                                           entry.value → OmakaseCommand
-                                                           +16 CommandId    Int32
-                                                           +20 SettingId    Int32
-                                                           +24 BaseWeight   Int32
+  权重 = 基础分 + 条件加成
 
-B. `/api/ai/weightcalls` —— 运行时取值链观测
-   hook SingleModeAutoPlayWeightRepositoryBase.GetBaseWeight(this, i32) -> i32
-     地址 0x7878098320，入口 `mov w19,w1` / `mov x20,x0`，ret_offsets [152]
-   为什么是它：
-     - FestaSingleModeAutoPlayWeightRepository 只覆写 6 个方法
-       （get_ScenarioId / ConvertToCommandIdTypeByTrainingCommandId /
-         CustomConvertToCommandIdTypeByTrainingCommandId /
-         get_AutoPlayPauseInfo / get_AutoPlayStopInfo / .ctor），
-       取权重的那一批全在 base 类，只有一份实现，全剧本共用；
-     - 它是 commandIdType → 基础权重的单一出口，比改 745 行静态表更靠上层，
-       不会被 modify / condition / filter 三层覆盖掉。
+  OmakaseCommand        +16 CommandId  +20 SettingId  +24 BaseWeight
+  OmakaseBasePt         +16 Id  +20 CommandId  +24 ConditionSetId  +28 AddValue
+  OmakaseConditionSet   +16 Id  +20 ConditionSetId  +24 ConditionType
+                        +28 ConditionValue1  +32 ConditionValue2
+  OmakaseFilter         +16 FilterId  +20 IsModifiable  +24 CommandId
+                        +28 ScenarioId  +32 ConditionSetId  +36 Priority
+  OmakaseModify         +16 ModifyId  +20 ScenarioId
+  OmakaseState          +16 Id  +20 ScenarioId  +24 StateId  +28 SettingId
 
-同族表偏移（MasterDataManager 下）：
-  +3192 scenario  +3200 state  +3216 basePt  +3224 outingBasePt
-  +3232 modify  +3240 modifyPt  +3248 conditionSet  +3256 filter
-  +3264 filterDetail  +3272 defaultPlan  +3280 defaultPlanSet
-  +3288 stopCondition  +3296 stopTrigger  +3304 stopperEvent
-  +3312 hideSkill  +3320 continueCondition  +3328 modifyLegend
-  +3336 basePtOnsen  +3344 conditionSetOnsen
+  全字段都是 plain Int32，没有 ObscuredInt。
 
-纪律：本脚本不写任何游戏数据。布局/映射未唯一判定前只输出观测值。
+  运行时取值链（SingleModeAutoPlayWeightRepositoryBase，全剧本共用一份）：
+    GetBaseWeight(commandIdType)              → OmakaseCommand.BaseWeight(+24)
+    GetWeightRecordList(commandIdType)        → OmakaseBasePt 行，条件满足 + AddValue(+28)
+    GetModifyWeightRecordList(commandIdType)  → modify 层再叠加
+  Festa 子类只覆写 6 个方法，没有一个跟取权重有关。
+
+持有者：Gallop.MasterDataManager（singleton=true, f=643），各表偏移见 OM_TABLES。
+
+端点：
+  /api/ai/weights      单独探测 command 表（Dictionary 头 + entries 原始字节）
+  /api/ai/tables       一次扫 20 张 omakase 表：指针 / dict / count
+  /api/ai/weightcalls  观测 GetBaseWeight 的 arg0→返回值（最近 16 组）
+
+纪律：本脚本不写任何游戏数据。布局与映射未唯一判定前只输出观测值。
 """
 
 import sys
@@ -41,33 +37,94 @@ import sys
 PATH = "src/lib.rs"
 
 PROBE_FN = r'''
-// ===== omakase_command 静态表：只读探测 =====
-unsafe fn dump_omakase_dict() -> String {
+// ===== omakase 表清单（MasterDataManager 下的字段偏移）=====
+const OM_TABLES: &[(&str, i32)] = &[
+    ("scenario", 3192),
+    ("state", 3200),
+    ("command", 3208),
+    ("basePt", 3216),
+    ("outingBasePt", 3224),
+    ("modify", 3232),
+    ("modifyPt", 3240),
+    ("conditionSet", 3248),
+    ("filter", 3256),
+    ("filterDetail", 3264),
+    ("defaultPlan", 3272),
+    ("defaultPlanSet", 3280),
+    ("stopCondition", 3288),
+    ("stopTrigger", 3296),
+    ("stopperEvent", 3304),
+    ("hideSkill", 3312),
+    ("continueCondition", 3320),
+    ("modifyLegend", 3328),
+    ("basePtOnsen", 3336),
+    ("conditionSetOnsen", 3344),
+];
+
+unsafe fn omakase_mdm() -> *const c_void {
     if API.is_null() {
-        return r#"{"error":"api_null"}"#.to_string();
+        return std::ptr::null();
     }
     let image = get_image();
     if image.is_null() {
-        return r#"{"error":"image_null"}"#.to_string();
+        return std::ptr::null();
     }
-    let mdm_class = find_class(
+    let cls = find_class(
         image,
         to_cstr("Gallop").as_ptr(),
         to_cstr("MasterDataManager").as_ptr(),
     );
-    if mdm_class.is_null() {
-        return r#"{"error":"no_mdm_class"}"#.to_string();
+    if cls.is_null() {
+        return std::ptr::null();
     }
-    let mdm = get_singleton(mdm_class);
+    get_singleton(cls)
+}
+
+// ===== 20 张 omakase 表一次扫（只要指针与行数，不展开行）=====
+unsafe fn dump_omakase_tables() -> String {
+    let mdm = omakase_mdm();
+    if mdm.is_null() {
+        return r#"{"error":"no_mdm_singleton"}"#.to_string();
+    }
+    let mut rows: Vec<String> = Vec::new();
+    for (name, off) in OM_TABLES {
+        let master = read_ptr_at(mdm, *off);
+        if master.is_null() {
+            rows.push(format!(r#"{{"table":"{}","off":{},"master":null}}"#, name, off));
+            continue;
+        }
+        // Master* 的 lazy 主键字典统一在 +24
+        let dict = read_ptr_at(master, 24);
+        if dict.is_null() {
+            rows.push(format!(
+                r#"{{"table":"{}","off":{},"master":"{:p}","dict":null}}"#,
+                name, off, master
+            ));
+            continue;
+        }
+        let count = read_int_at(dict, 0x20);
+        let entries = read_ptr_at(dict, 0x18);
+        rows.push(format!(
+            r#"{{"table":"{}","off":{},"master":"{:p}","dict":"{:p}","count":{},"entries":"{:p}"}}"#,
+            name, off, master, dict, count, entries
+        ));
+    }
+    format!(
+        r#"{{"ok":true,"mdm":"{:p}","tables":[{}]}}"#,
+        mdm,
+        rows.join(",")
+    )
+}
+
+// ===== command 表深探（Dictionary 头 + entries 原始字节）=====
+unsafe fn dump_omakase_dict() -> String {
+    let mdm = omakase_mdm();
     if mdm.is_null() {
         return r#"{"error":"no_mdm_singleton"}"#.to_string();
     }
     let master = read_ptr_at(mdm, 3208);
     if master.is_null() {
-        return format!(
-            r#"{{"error":"omakase_command_null","mdm":"{:p}"}}"#,
-            mdm
-        );
+        return format!(r#"{{"error":"omakase_command_null","mdm":"{:p}"}}"#, mdm);
     }
     let dict = read_ptr_at(master, 24);
     if dict.is_null() {
@@ -110,32 +167,17 @@ unsafe fn dump_omakase_dict() -> String {
 
     format!(
         r#"{{"ok":true,"mdm":"{:p}","master":"{:p}","dict":"{:p}","head_hex":"{}","buckets":"{:p}","entries":"{:p}","count":{},"freeList":{},"freeCount":{},"version":{},"keys":"{:p}","values":"{:p}","buckets_hex32":"{}","entries_words_u64":"[{}]","entries_hex_first8x24":"{}"}}"#,
-        mdm,
-        master,
-        dict,
-        hex_encode(head),
-        buckets,
-        entries,
-        count,
-        free_list,
-        free_count,
-        version,
-        keys,
-        values,
-        buck_hex,
-        ent_words,
-        ent_hex
+        mdm, master, dict, hex_encode(head), buckets, entries, count,
+        free_list, free_count, version, keys, values, buck_hex, ent_words, ent_hex
     )
 }
 
 // ===== GetBaseWeight 运行时观测 =====
 //
-// 目标方法：SingleModeAutoPlayWeightRepositoryBase.GetBaseWeight
-//   地址 0x7878098320（本次构建）
-//   入口 `mov w19, w1`（arg0 = i32）、`mov x20, x0`（this）
+// 目标：SingleModeAutoPlayWeightRepositoryBase.GetBaseWeight
+//   地址 0x7878098320，入口 `mov w19,w1`（arg0=i32）/ `mov x20,x0`（this）
 //   出口 x0/w0，ret_offsets [152]
-// 只记录 arg0 → 返回值，不替改。用于建立
-// 「commandIdType → 训练/休息/外出/比赛」映射，再决定怎么喂 matsuri 分。
+// 只记录 arg0 → 返回值，用于建立 commandIdType ↔ 训练/休息/外出/比赛的映射。
 static WB_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WB_ERR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 static WB_ADDR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -256,6 +298,8 @@ ROUTE_OLD = '    } else if path == "/api/ai/init" {'
 
 ROUTE_NEW = '''    } else if path == "/api/ai/weights" {
         unsafe { dump_omakase_dict() }
+    } else if path == "/api/ai/tables" {
+        unsafe { dump_omakase_tables() }
     } else if path == "/api/ai/weightcalls" {
         let install = unsafe { install_weight_hook() };
         format!(r#"{{"install":"{}","calls":{}}}"#, install, weight_calls_json())
@@ -271,23 +315,22 @@ def main() -> int:
     s = open(PATH, encoding="utf-8").read()
     before = len(s)
 
-    # ---- 1) 注入探测与观测 ----
     anchor = "fn selector_hooks_json() -> String {"
     if s.count(anchor) != 1:
         return _fail(f"anchor selector_hooks_json count={s.count(anchor)}")
     s = s.replace(anchor, PROBE_FN.strip() + "\n\n" + anchor, 1)
 
-    # ---- 2) ENDPOINTS ----
     anchor = '    "/api/ai/hooks",'
     if s.count(anchor) != 1:
         return _fail(f"anchor ENDPOINTS hooks count={s.count(anchor)}")
     s = s.replace(
         anchor,
-        anchor + '\n    "/api/ai/weights",\n    "/api/ai/weightcalls",',
+        anchor
+        + '\n    "/api/ai/weights",\n    "/api/ai/tables",'
+          '\n    "/api/ai/weightcalls",',
         1,
     )
 
-    # ---- 3) 路由 ----
     if s.count(ROUTE_OLD) != 1:
         return _fail(f"route anchor init count={s.count(ROUTE_OLD)}")
     s = s.replace(ROUTE_OLD, ROUTE_NEW, 1)
@@ -295,10 +338,11 @@ def main() -> int:
     open(PATH, "w", encoding="utf-8").write(s)
     print(f"patched {PATH}: {before} -> {len(s)} bytes")
     for needle in (
+        "OM_TABLES",
+        "fn dump_omakase_tables",
         "fn dump_omakase_dict",
         "fn get_base_weight_hook",
-        "fn install_weight_hook",
-        "/api/ai/weights",
+        "/api/ai/tables",
         "/api/ai/weightcalls",
     ):
         hits = sum(1 for line in s.splitlines() if needle in line)
