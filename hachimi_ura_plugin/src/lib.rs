@@ -567,6 +567,15 @@ extern "C" fn ui_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
 static mut ORIG_TMP_TEXT_PROLOGUE: [u8; 16] = [0; 16];
 static mut ORIG_UNITY_UI_TEXT_PROLOGUE: [u8; 16] = [0; 16];
 static TMP_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
+static UI_HOOK_STATUS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+fn ui_hook_log(msg: String) {
+    if let Ok(mut v) = UI_HOOK_STATUS.lock() {
+        if v.len() < 64 {
+            v.push(msg);
+        }
+    }
+}
 static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
 // ===== 训练/支援卡过场诊断（只记录，不改行为）=====
@@ -787,26 +796,41 @@ unsafe fn install_ui_text_hook() {
         &mut ORIG_UI_TEXT_PROLOGUE,
     ) {
         UI_TEXT_HOOK_ON.store(true, Ordering::Relaxed);
+        ui_hook_log("TextCommon.set_text: installed".to_string());
+    } else {
+        ui_hook_log("TextCommon.set_text: install failed".to_string());
     }
 
-    // Gallop.TextMeshProUguiCommon.set_text（游戏对 TextMeshPro 的封装类）
+    // Gallop.TextMeshProUguiCommon.set_text
     if !TMP_TEXT_HOOKED.load(Ordering::Relaxed) {
-        let c = find_class(
+        let mut c = find_class(
             image,
             to_cstr("Gallop").as_ptr(),
             to_cstr("TextMeshProUguiCommon").as_ptr(),
         );
-        if !c.is_null() {
-            let a = find_method_addr(c, "set_text", 1);
-            if a != 0
-                && install_hook_safe(
-                    "TextMeshProUguiCommon.set_text",
-                    a,
-                    tmp_text_set_text_hook as usize,
-                    &mut ORIG_TMP_TEXT_PROLOGUE,
-                )
-            {
+        if c.is_null() {
+            ui_hook_log("TMP: full-name class miss, trying short name".to_string());
+            c = find_class_by_short_name(image, "TextMeshProUguiCommon");
+        }
+        if c.is_null() {
+            ui_hook_log("TMP: class NOT FOUND".to_string());
+        } else {
+            let mut a = find_method_addr(c, "set_text", 1);
+            if a == 0 {
+                a = find_method_fuzzy(c, "set_text");
+            }
+            if a == 0 {
+                ui_hook_log("TMP: class ok but set_text NOT FOUND".to_string());
+            } else if install_hook_safe(
+                "TextMeshProUguiCommon.set_text",
+                a,
+                tmp_text_set_text_hook as usize,
+                &mut ORIG_TMP_TEXT_PROLOGUE,
+            ) {
                 TMP_TEXT_HOOKED.store(true, Ordering::Relaxed);
+                ui_hook_log(format!("TMP: installed at 0x{:x}", a));
+            } else {
+                ui_hook_log(format!("TMP: install_hook failed at 0x{:x}", a));
             }
         }
     }
@@ -818,17 +842,25 @@ unsafe fn install_ui_text_hook() {
             to_cstr("UnityEngine.UI").as_ptr(),
             to_cstr("Text").as_ptr(),
         );
-        if !c.is_null() {
-            let a = find_method_addr(c, "set_text", 1);
-            if a != 0
-                && install_hook_safe(
-                    "UI.Text.set_text",
-                    a,
-                    ui_text_set_text_hook as usize,
-                    &mut ORIG_UNITY_UI_TEXT_PROLOGUE,
-                )
-            {
+        if c.is_null() {
+            ui_hook_log("UI.Text: class NOT FOUND".to_string());
+        } else {
+            let mut a = find_method_addr(c, "set_text", 1);
+            if a == 0 {
+                a = find_method_fuzzy(c, "set_text");
+            }
+            if a == 0 {
+                ui_hook_log("UI.Text: set_text NOT FOUND".to_string());
+            } else if install_hook_safe(
+                "UI.Text.set_text",
+                a,
+                ui_text_set_text_hook as usize,
+                &mut ORIG_UNITY_UI_TEXT_PROLOGUE,
+            ) {
                 UI_TEXT_HOOKED.store(true, Ordering::Relaxed);
+                ui_hook_log(format!("UI.Text: installed at 0x{:x}", a));
+            } else {
+                ui_hook_log("UI.Text: install_hook failed".to_string());
             }
         }
     }
