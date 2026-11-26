@@ -65,91 +65,12 @@ jobs:
           grep -rn "default-features = false" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
           sed -i -E "s/(=[[:space:]]*\{ *workspace *= *true *), *default-features *= *false/\1/" vendor/matsuri/umaai_next/crates/*/Cargo.toml
           grep -rn "default-features" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
-      - name: patch lib.rs（挂 matsuri_bridge 与两个端点）
+      - name: patch lib.rs (挂 matsuri_bridge 与两个端点)
         working-directory: hachimi_ura_plugin
         run: |
-          python3 - <<'PY'
-          import sys
-          p = "src/lib.rs"
-          s = open(p, encoding="utf-8").read()
-
-          # 1) 模块声明
-          n = "mod ui_rename;"
-          c = s.count(n)
-          if c != 1:
-              sys.exit(f"mod ui_rename; count={c}")
-          s = s.replace(n, n + '\n#[cfg(feature = "matsuri")]\nmod matsuri_bridge;', 1)
-
-          # 2) ENDPOINTS 注册（第一处 = const ENDPOINTS）
-          n = '    "/scenario",'
-          if s.count(n) < 1:
-              sys.exit("ENDPOINTS anchor missing")
-          s = s.replace(n, n + '\n    "/api/ai/status",\n    "/api/ai/init",', 1)
-
-          # 3) 路由分支
-          anchor = '    } else if path == "/scenario" {'
-          c = s.count(anchor)
-          if c != 1:
-              sys.exit(f"route anchor count={c}")
-          block = '''    } else if path == "/api/ai/status" {
-        #[cfg(feature = "matsuri")]
-        {
-            matsuri_bridge::status_json()
-        }
-        #[cfg(not(feature = "matsuri"))]
-        {
-            r#"{"ok":false,"error":"matsuri_feature_off"}"#.to_string()
-        }
-    } else if path == "/api/ai/init" {
-        #[cfg(feature = "matsuri")]
-        {
-            // 配置：/sdcard/Download/uma_so/matsuri_uma.txt
-            //   uma=101301
-            //   cards=303174,303114,303004,303224,303204,303234
-            //   seed=61444
-            let mut uma = 0u32;
-            let mut seed = 61444u64;
-            let mut cards: Vec<u32> = Vec::new();
-            if let Ok(text) = std::fs::read_to_string("/sdcard/Download/uma_so/matsuri_uma.txt") {
-                for line in text.lines() {
-                    let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') {
-                        continue;
-                    }
-                    if let Some(v) = line.strip_prefix("uma=") {
-                        uma = v.trim().parse().unwrap_or(0);
-                    } else if let Some(v) = line.strip_prefix("seed=") {
-                        seed = v.trim().parse().unwrap_or(61444);
-                    } else if let Some(v) = line.strip_prefix("cards=") {
-                        cards = v
-                            .split(',')
-                            .filter_map(|x| x.trim().parse::<u32>().ok())
-                            .collect();
-                    }
-                }
-            }
-            match matsuri_bridge::init(uma, &cards, seed) {
-                Ok(()) => format!(
-                    r#"{{"ok":true,"uma":{},"cards":{},"seed":{}}}"#,
-                    uma,
-                    cards.len(),
-                    seed
-                ),
-                Err(e) => format!(r#"{{"ok":false,"error":"{}"}}"#, e.replace('"', "'")),
-            }
-        }
-        #[cfg(not(feature = "matsuri"))]
-        {
-            r#"{"ok":false,"error":"matsuri_feature_off"}"#.to_string()
-        }
-'''
-          s = s.replace(anchor, block + anchor, 1)
-
-          open(p, "w", encoding="utf-8").write(s)
-          print("patched lib.rs:", len(s), "bytes")
-          PY
+          python3 ci_patch.py
           grep -n "mod matsuri_bridge" src/lib.rs
-          grep -n "api/ai/status" src/lib.rs | head -3
+          grep -n "api/ai/init" src/lib.rs | head -3
       - name: build
         working-directory: hachimi_ura_plugin
         run: |
