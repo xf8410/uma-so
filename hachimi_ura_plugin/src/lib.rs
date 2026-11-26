@@ -499,7 +499,8 @@ extern "C" fn textcommon_set_text_hook(this: *mut c_void, value: *mut c_void) {
                 }
                 if ui_zh_enabled() {
                     if let Some(zh) = ui_zh_lookup(&s) {
-                        let ns = zh_string_keepalive(zh);
+                        // 每次新建、同帧使用：不长期持有，避免 GC root 处理
+                        let ns = make_il2cpp_string(zh);
                         if !ns.is_null() {
                             out = ns;
                         }
@@ -515,6 +516,58 @@ extern "C" fn textcommon_set_text_hook(this: *mut c_void, value: *mut c_void) {
         }
     }
 }
+
+// 通用替换：命中则返回新串，否则原样返回
+unsafe fn ui_translate(value: *mut c_void) -> *mut c_void {
+    if value.is_null() || !ui_zh_enabled() {
+        return value;
+    }
+    let s = read_il2cpp_string(value);
+    if s.is_empty() {
+        return value;
+    }
+    if let Ok(mut v) = UI_TEXT_SEEN.lock() {
+        if v.len() < 4000 && !v.iter().any(|x| x == &s) {
+            v.push(s.clone());
+        }
+    }
+    match ui_zh_lookup(&s) {
+        Some(zh) => {
+            let ns = make_il2cpp_string(zh);
+            if ns.is_null() { value } else { ns }
+        }
+        None => value,
+    }
+}
+
+// TMPro.TMP_Text.set_text(string)
+extern "C" fn tmp_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
+    unsafe {
+        let out = ui_translate(value);
+        let tramp = interceptor_get_trampoline(tmp_text_set_text_hook as usize);
+        if tramp != 0 {
+            let orig: unsafe extern "C" fn(*mut c_void, *mut c_void) = std::mem::transmute(tramp);
+            orig(this, out);
+        }
+    }
+}
+
+// UnityEngine.UI.Text.set_text(string)
+extern "C" fn ui_text_set_text_hook(this: *mut c_void, value: *mut c_void) {
+    unsafe {
+        let out = ui_translate(value);
+        let tramp = interceptor_get_trampoline(ui_text_set_text_hook as usize);
+        if tramp != 0 {
+            let orig: unsafe extern "C" fn(*mut c_void, *mut c_void) = std::mem::transmute(tramp);
+            orig(this, out);
+        }
+    }
+}
+
+static mut ORIG_TMP_TEXT_PROLOGUE: [u8; 16] = [0; 16];
+static mut ORIG_UI_TEXT_PROLOGUE: [u8; 16] = [0; 16];
+static TMP_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
+static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
 unsafe fn install_ui_text_hook() {
     if UI_TEXT_HOOK_ON.load(Ordering::Relaxed) {
@@ -541,6 +594,50 @@ unsafe fn install_ui_text_hook() {
         &mut ORIG_UI_TEXT_PROLOGUE,
     ) {
         UI_TEXT_HOOK_ON.store(true, Ordering::Relaxed);
+    }
+
+    // TMPro.TMP_Text.set_text（Unity 引擎类，元数据里存在）
+    if !TMP_TEXT_HOOKED.load(Ordering::Relaxed) {
+        let c = find_class(
+            image,
+            to_cstr("TMPro").as_ptr(),
+            to_cstr("TMP_Text").as_ptr(),
+        );
+        if !c.is_null() {
+            let a = find_method_addr(c, "set_text", 1);
+            if a != 0
+                && install_hook_safe(
+                    "TMP_Text.set_text",
+                    a,
+                    tmp_text_set_text_hook as usize,
+                    &mut ORIG_TMP_TEXT_PROLOGUE,
+                )
+            {
+                TMP_TEXT_HOOKED.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    // UnityEngine.UI.Text.set_text
+    if !UI_TEXT_HOOKED.load(Ordering::Relaxed) {
+        let c = find_class(
+            image,
+            to_cstr("UnityEngine.UI").as_ptr(),
+            to_cstr("Text").as_ptr(),
+        );
+        if !c.is_null() {
+            let a = find_method_addr(c, "set_text", 1);
+            if a != 0
+                && install_hook_safe(
+                    "UI.Text.set_text",
+                    a,
+                    ui_text_set_text_hook as usize,
+                    &mut ORIG_UI_TEXT_PROLOGUE,
+                )
+            {
+                UI_TEXT_HOOKED.store(true, Ordering::Relaxed);
+            }
+        }
     }
 }
 
