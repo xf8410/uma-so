@@ -578,6 +578,125 @@ fn ui_hook_log(msg: String) {
 }
 static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
+// ===== 播放倍率加速（剧情 Timeline / 训练 cut）=====
+// 全部是 static 纯函数，只返回倍率，不改总时长、不改调用时序
+static TS_ON: AtomicBool = AtomicBool::new(false);
+static TS_HITS: AtomicU64 = AtomicU64::new(0);
+static TS_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+static TS_LAST_READ: AtomicU64 = AtomicU64::new(0);
+static mut ORIG_TS_STORY0: [u8; 16] = [0; 16];
+static mut ORIG_TS_STORY1: [u8; 16] = [0; 16];
+static mut ORIG_TS_CUT_LEN: [u8; 16] = [0; 16];
+static mut ORIG_TS_CUT0: [u8; 16] = [0; 16];
+const TS_DEFAULT: f32 = 20.0;
+
+/// 倍率来源：/sdcard/Download/uma_so/speed_x.txt（1.0~60.0），10 秒缓存
+fn ts_value() -> f32 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(TS_LAST_READ.load(Ordering::Relaxed)) > 10 {
+        TS_LAST_READ.store(now, Ordering::Relaxed);
+        let v = std::fs::read_to_string("/sdcard/Download/uma_so/speed_x.txt")
+            .ok()
+            .and_then(|t| t.trim().parse::<f32>().ok())
+            .filter(|x| x.is_finite() && *x >= 1.0 && *x <= 60.0)
+            .unwrap_or(TS_DEFAULT);
+        TS_BITS.store(v.to_bits(), Ordering::Relaxed);
+    }
+    let b = TS_BITS.load(Ordering::Relaxed);
+    if b == 0 { TS_DEFAULT } else { f32::from_bits(b) }
+}
+
+// StoryViewController.GetTimeScaleByHighSpeedType()
+extern "C" fn ts_story0_hook() -> f32 {
+    if TS_ON.load(Ordering::Relaxed) {
+        TS_HITS.fetch_add(1, Ordering::Relaxed);
+        return ts_value();
+    }
+    unsafe {
+        let t = interceptor_get_trampoline(ts_story0_hook as usize);
+        if t == 0 { return 1.0; }
+        let f: unsafe extern "C" fn() -> f32 = std::mem::transmute(t);
+        f()
+    }
+}
+
+// StoryViewController.GetTimeScaleByHighSpeedType(type)
+extern "C" fn ts_story1_hook(t: *mut c_void) -> f32 {
+    if TS_ON.load(Ordering::Relaxed) {
+        TS_HITS.fetch_add(1, Ordering::Relaxed);
+        return ts_value();
+    }
+    unsafe {
+        let p = interceptor_get_trampoline(ts_story1_hook as usize);
+        if p == 0 { return 1.0; }
+        let f: unsafe extern "C" fn(*mut c_void) -> f32 = std::mem::transmute(p);
+        f(t)
+    }
+}
+
+// SingleModeUtils.GetTrainingCutTimeScale(cutLength: f32)
+extern "C" fn ts_cut_len_hook(cut_len: f32) -> f32 {
+    if TS_ON.load(Ordering::Relaxed) {
+        TS_HITS.fetch_add(1, Ordering::Relaxed);
+        return ts_value();
+    }
+    unsafe {
+        let p = interceptor_get_trampoline(ts_cut_len_hook as usize);
+        if p == 0 { return 1.0; }
+        let f: unsafe extern "C" fn(f32) -> f32 = std::mem::transmute(p);
+        f(cut_len)
+    }
+}
+
+// SingleModeUtils.GetCutTimeScale()
+extern "C" fn ts_cut0_hook() -> f32 {
+    if TS_ON.load(Ordering::Relaxed) {
+        TS_HITS.fetch_add(1, Ordering::Relaxed);
+        return ts_value();
+    }
+    unsafe {
+        let p = interceptor_get_trampoline(ts_cut0_hook as usize);
+        if p == 0 { return 1.0; }
+        let f: unsafe extern "C" fn() -> f32 = std::mem::transmute(p);
+        f()
+    }
+}
+
+unsafe fn install_timescale_hooks() {
+    let image = get_image();
+    if image.is_null() { return; }
+    // StoryViewController
+    let mut c = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("StoryViewController").as_ptr());
+    if c.is_null() { c = find_class_by_short_name(image, "StoryViewController"); }
+    if !c.is_null() {
+        let a0 = find_method_addr(c, "GetTimeScaleByHighSpeedType", 0);
+        if a0 != 0 {
+            install_hook_safe("Story.TS0", a0, ts_story0_hook as usize, &mut ORIG_TS_STORY0);
+        }
+        let a1 = find_method_addr(c, "GetTimeScaleByHighSpeedType", 1);
+        if a1 != 0 {
+            install_hook_safe("Story.TS1", a1, ts_story1_hook as usize, &mut ORIG_TS_STORY1);
+        }
+    }
+    // SingleModeUtils
+    let mut u = find_class(image, to_cstr("Gallop").as_ptr(), to_cstr("SingleModeUtils").as_ptr());
+    if u.is_null() { u = find_class_by_short_name(image, "SingleModeUtils"); }
+    if !u.is_null() {
+        let b1 = find_method_addr(u, "GetTrainingCutTimeScale", 1);
+        if b1 != 0 {
+            install_hook_safe("SingleMode.CutTS", b1, ts_cut_len_hook as usize, &mut ORIG_TS_CUT_LEN);
+        }
+        let b0 = find_method_addr(u, "GetCutTimeScale", 0);
+        if b0 != 0 {
+            install_hook_safe("SingleMode.CutTS0", b0, ts_cut0_hook as usize, &mut ORIG_TS_CUT0);
+        }
+    }
+    ura_log(3, "timescale hooks installed");
+}
+
 // ===== 高速播放时长压到 3 帧 =====
 // SingleModeUtils.GetHighSpeedPlayDuration() -> f32（秒），static
 static DUR3F_ON: AtomicBool = AtomicBool::new(false);
@@ -7712,6 +7831,7 @@ fn push_loop() {
                 install_ui_text_hook();
                 install_cutin_trace();
                 install_duration_hook();
+                install_timescale_hooks();
                 rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
@@ -8490,6 +8610,9 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/auth/clear",
             "/api/sniff/unity",
         "/api/training/anim_skip/trace",
+        "/api/speed/timescale",
+        "/api/speed/timescale/on",
+        "/api/speed/timescale/off",
         "/api/speed/duration3f",
         "/api/speed/duration3f/on",
         "/api/speed/duration3f/off",
@@ -8612,6 +8735,19 @@ fn handle_http(mut stream: std::net::TcpStream) {
             log_snapshot("data", &result);
         }
         result
+    } else if path == "/api/speed/timescale" {
+        format!(
+            r#"{{"ok":true,"enabled":{},"hits":{},"multiplier":{}}}"#,
+            TS_ON.load(Ordering::Relaxed),
+            TS_HITS.load(Ordering::Relaxed),
+            ts_value()
+        )
+    } else if path == "/api/speed/timescale/on" {
+        TS_ON.store(true, Ordering::Relaxed);
+        format!(r#"{{"ok":true,"enabled":true,"multiplier":{}}}"#, ts_value())
+    } else if path == "/api/speed/timescale/off" {
+        TS_ON.store(false, Ordering::Relaxed);
+        r#"{"ok":true,"enabled":false}"#.to_string()
     } else if path == "/api/speed/duration3f" {
         format!(
             r#"{{"ok":true,"enabled":{},"hits":{},"frame3_sec":{}}}"#,
