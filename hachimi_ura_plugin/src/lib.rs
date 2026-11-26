@@ -569,6 +569,199 @@ static mut ORIG_UNITY_UI_TEXT_PROLOGUE: [u8; 16] = [0; 16];
 static TMP_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 static UI_TEXT_HOOKED: AtomicBool = AtomicBool::new(false);
 
+// ===== 训练/支援卡过场诊断（只记录，不改行为）=====
+static CUTIN_TRACE: std::sync::Mutex<Vec<(u64, &'static str, String)>> =
+    std::sync::Mutex::new(Vec::new());
+static CUTIN_TRACE_ON: AtomicBool = AtomicBool::new(true);
+static CUTIN_THIS: AtomicUsize = AtomicUsize::new(0);
+static CUTIN_T0: AtomicU64 = AtomicU64::new(0);
+static mut ORIG_CUTIN_INIT_A: [u8; 16] = [0; 16];
+static mut ORIG_CUTIN_INIT_B: [u8; 16] = [0; 16];
+static mut ORIG_CUTIN_REG: [u8; 16] = [0; 16];
+static mut ORIG_CUTIN_CLEAN: [u8; 16] = [0; 16];
+static mut ORIG_CUTIN_MODEL: [u8; 16] = [0; 16];
+
+fn cutin_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn cutin_push(ev: &'static str, info: String) {
+    if !CUTIN_TRACE_ON.load(Ordering::Relaxed) {
+        return;
+    }
+    if let Ok(mut v) = CUTIN_TRACE.lock() {
+        if v.len() >= 300 {
+            v.remove(0);
+        }
+        v.push((cutin_now_ms(), ev, info));
+    }
+}
+
+type CutInitFn = unsafe extern "C" fn(
+    *mut c_void, *mut c_void, i32, *mut c_void, *mut c_void,
+    *mut c_void, *mut c_void, i32,
+) -> *const c_void;
+
+extern "C" fn cutin_init_hook(
+    this: *mut c_void,
+    a1: *mut c_void,
+    a2: i32,
+    on_play: *mut c_void,
+    on_end: *mut c_void,
+    a5: *mut c_void,
+    a6: *mut c_void,
+    a7: i32,
+) -> *const c_void {
+    unsafe {
+        let path = if a1.is_null() { String::new() } else { read_il2cpp_string(a1) };
+        CUTIN_THIS.store(this as usize, Ordering::Relaxed);
+        CUTIN_T0.store(cutin_now_ms(), Ordering::Relaxed);
+        cutin_push(
+            "Init",
+            format!("path={} idx={} onEnd={:p} bg={}", path, a7, on_end, a2),
+        );
+        let tramp = interceptor_get_trampoline(cutin_init_hook as usize);
+        if tramp == 0 {
+            return std::ptr::null();
+        }
+        let orig: CutInitFn = std::mem::transmute(tramp);
+        orig(this, a1, a2, on_play, on_end, a5, a6, a7)
+    }
+}
+
+extern "C" fn cutin_init_hook_b(
+    this: *mut c_void,
+    a1: *mut c_void,
+    a2: i32,
+    on_play: *mut c_void,
+    on_end: *mut c_void,
+    a5: *mut c_void,
+    a6: *mut c_void,
+    a7: i32,
+) -> *const c_void {
+    unsafe {
+        let path = if a1.is_null() { String::new() } else { read_il2cpp_string(a1) };
+        CUTIN_THIS.store(this as usize, Ordering::Relaxed);
+        CUTIN_T0.store(cutin_now_ms(), Ordering::Relaxed);
+        cutin_push(
+            "Init2",
+            format!("path={} idx={} onEnd={:p} bg={}", path, a7, on_end, a2),
+        );
+        let tramp = interceptor_get_trampoline(cutin_init_hook_b as usize);
+        if tramp == 0 {
+            return std::ptr::null();
+        }
+        let orig: CutInitFn = std::mem::transmute(tramp);
+        orig(this, a1, a2, on_play, on_end, a5, a6, a7)
+    }
+}
+
+extern "C" fn cutin_reg_hook(this: *mut c_void) -> *const c_void {
+    unsafe {
+        cutin_push("RegisterCallback", format!("this={:p}", this));
+        let tramp = interceptor_get_trampoline(cutin_reg_hook as usize);
+        if tramp == 0 {
+            return std::ptr::null();
+        }
+        let orig: unsafe extern "C" fn(*mut c_void) -> *const c_void = std::mem::transmute(tramp);
+        orig(this)
+    }
+}
+
+extern "C" fn cutin_clean_hook(this: *mut c_void) {
+    unsafe {
+        let dt = cutin_now_ms().saturating_sub(CUTIN_T0.load(Ordering::Relaxed));
+        cutin_push("CleanupPlaying", format!("this={:p} since_init={}ms", this, dt));
+        let tramp = interceptor_get_trampoline(cutin_clean_hook as usize);
+        if tramp == 0 {
+            return;
+        }
+        let orig: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(tramp);
+        orig(this)
+    }
+}
+
+extern "C" fn cutin_model_hook(this: *mut c_void, arg: *mut c_void) -> *const c_void {
+    unsafe {
+        let dt = cutin_now_ms().saturating_sub(CUTIN_T0.load(Ordering::Relaxed));
+        cutin_push("CreateModelList", format!("this={:p} since_init={}ms", this, dt));
+        let tramp = interceptor_get_trampoline(cutin_model_hook as usize);
+        if tramp == 0 {
+            return std::ptr::null();
+        }
+        let orig: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const c_void =
+            std::mem::transmute(tramp);
+        orig(this, arg)
+    }
+}
+
+unsafe fn install_cutin_trace() {
+    let image = get_image();
+    if image.is_null() {
+        return;
+    }
+    // 2.33.0：训练演出按剧本拆，优先 Festa，其次其他 *CutInHelper
+    let mut class = find_class(
+        image,
+        to_cstr("Gallop").as_ptr(),
+        to_cstr("SingleModeScenarioFestaCutInHelper").as_ptr(),
+    );
+    if class.is_null() {
+        class = find_class_by_short_name(image, "SingleModeScenarioFestaCutInHelper");
+    }
+    if class.is_null() {
+        ura_log(3, "cutin trace: FestaCutInHelper not found");
+        return;
+    }
+    let mut init_hooked = 0;
+    for name in ["Init"] {
+        let a = find_method_addr(class, name, 7);
+        if a != 0 {
+            if init_hooked == 0
+                && install_hook_safe(
+                    "CutIn.Init",
+                    a,
+                    cutin_init_hook as usize,
+                    &mut ORIG_CUTIN_INIT_A,
+                )
+            {
+                init_hooked = 1;
+            }
+        }
+    }
+    let reg = find_method_addr(class, "RegisterCallback", 0);
+    if reg != 0 {
+        install_hook_safe(
+            "CutIn.RegisterCallback",
+            reg,
+            cutin_reg_hook as usize,
+            &mut ORIG_CUTIN_REG,
+        );
+    }
+    let clean = find_method_addr(class, "CleanupPlaying", 0);
+    if clean != 0 {
+        install_hook_safe(
+            "CutIn.CleanupPlaying",
+            clean,
+            cutin_clean_hook as usize,
+            &mut ORIG_CUTIN_CLEAN,
+        );
+    }
+    let model = find_method_addr(class, "CreateModelList", 1);
+    if model != 0 {
+        install_hook_safe(
+            "CutIn.CreateModelList",
+            model,
+            cutin_model_hook as usize,
+            &mut ORIG_CUTIN_MODEL,
+        );
+    }
+    ura_log(3, "cutin trace installed");
+}
+
 unsafe fn install_ui_text_hook() {
     if UI_TEXT_HOOK_ON.load(Ordering::Relaxed) {
         return;
@@ -7405,6 +7598,7 @@ fn push_loop() {
                 install_failure_rate_hook();
                 install_event_choice_hook();
                 install_ui_text_hook();
+                install_cutin_trace();
                 rng_consumption_probe::install();
                 // ★ v3.24.40: sniff hooks were missing here — fallback mode
                 // left /api/sniff permanently unhooked.
@@ -8182,6 +8376,8 @@ fn handle_http(mut stream: std::net::TcpStream) {
             "/api/auth/toggle",
             "/api/auth/clear",
             "/api/sniff/unity",
+        "/api/training/anim_skip/trace",
+        "/api/training/anim_skip/trace_clear",
         "/matsuri/ui_texts",
             "/api/md5log",
             "/api/md5log/clear",
@@ -8300,6 +8496,29 @@ fn handle_http(mut stream: std::net::TcpStream) {
             log_snapshot("data", &result);
         }
         result
+    } else if path == "/api/training/anim_skip/trace" {
+        let v = CUTIN_TRACE.lock().map(|g| g.clone()).unwrap_or_default();
+        let rows: Vec<String> = v
+            .iter()
+            .map(|(t, e, i)| {
+                format!(
+                    r#"{{"t_ms":{},"ev":"{}","info":"{}"}}"#,
+                    t,
+                    e,
+                    json_escape(i)
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"ok":true,"count":{},"trace":[{}]}}"#,
+            rows.len(),
+            rows.join(",")
+        )
+    } else if path == "/api/training/anim_skip/trace_clear" {
+        if let Ok(mut v) = CUTIN_TRACE.lock() {
+            v.clear();
+        }
+        r#"{"ok":true,"cleared":true}"#.to_string()
     } else if path == "/matsuri/ui_texts" {
         let v = UI_TEXT_SEEN
             .lock()
