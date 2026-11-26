@@ -20650,11 +20650,27 @@ unsafe fn debug_training_partners_inner() -> String {
             r#"{"error":"null"}"#.to_string()
         };
 
+        // ★ 纯探针：+96 ParamsIncDecInfoArray
+        //   只搬原始字节，不假设元素结构（元素类型/宽度待 dumpclass 确认）
+        let params_inc_dec = read_ptr_at(command, 96);
+        let pid_diag = if !params_inc_dec.is_null() {
+            let plen = std::ptr::read_unaligned(
+                (params_inc_dec as *const u8).add(16) as *const i32
+            );
+            let praw = debug_hex(params_inc_dec as *const u8, 192);
+            format!(
+                r#"{{"ptr":"0x{:x}","len":{},"raw_hex":"{}"}}"#,
+                params_inc_dec as usize, plen, praw
+            )
+        } else {
+            r#"{"error":"null"}"#.to_string()
+        };
+
         cmd_parts.push(format!(
-            r#"{{"index":{},"command_id":{},"command_ptr":"0x{:x}","command_class":"{}","command_raw_hex":"{}","training_partners":{},"tips_event_partners":{}}}"#,
+            r#"{{"index":{},"command_id":{},"command_ptr":"0x{:x}","command_class":"{}","command_raw_hex":"{}","training_partners":{},"tips_event_partners":{},"params_inc_dec":{}}}"#,
             index, command_id, command as usize,
             json_escape(&command_class_name), command_raw,
-            tp_diag, tips_diag
+            tp_diag, tips_diag, pid_diag
         ));
     }
 
