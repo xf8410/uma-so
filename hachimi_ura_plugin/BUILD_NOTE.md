@@ -3,35 +3,45 @@
 本文件只用来触发 `build-so` workflow（它的 `paths` 过滤只监听 `hachimi_ura_plugin/**`），
 不参与编译，可随时增删。
 
-## 2026-11-27 · ci_patch9（matsuri 搬到后台线程）
+## 2026-11-27 · ci_patch10（dataset 缺失给空 festa）
 
-### 闪退现场
-
-- `matsuri_data/` 目录在闪退那一刻创建，6 个文件 7.3 MB 全部落盘（含 5.7 MB text_data_dict.json）
-- `ura.log` 无崩溃记录，`/data/tombstones` 最新 11-18、`/data/anr` 最新 11-23，都不是这次
-- 插件自己装了 SIGSEGV handler，段错误被它接住后直接退出，所以系统层不留 tombstone
-
-结论：**崩在 `Data::init` 解析那 7.3 MB**，而它当时跑在 `GetBaseWeight` 的 hook 里
-（游戏渲染线程）。不是偏移问题，是线程放错。
-
-### 改法
+### 进度线
 
 ```
-hook GetBaseWeight     只读 MT_W 静态缓存，命中即返回，零计算
-matsuri-worker 线程    启动等 5 秒 → 每 3 秒 run 一次 identity→init→frame→decide
-                       → 写 MT_W；每轮 catch_unwind；栈 8 MB
+matsuri 会话        ready=true    ✅ 7.3MB 在后台线程解析通过，卡组 6 张过门禁
+帧构造              dataset_null  ❌ 卡在这
 ```
 
-未就绪时 hook 原样透传，行为等同没装闭环。
-
-### 判断闭环是否真的接管
+`WorkSingleModeScenarioFesta` 只有 1 个字段（`+16 DataSet`），property 与 backing field
+都是 null —— 2.33.2 把这套 DataSet 在运行时停用了，数据搬到
+`Gallop.SingleMode.ScenarioFesta.*` 的 Repository/Entity：
 
 ```
-/api/ai/matsuri   state 0→1，weights[] 出现 10..200 的分
-/api/ai/weightcalls  hits 涨，ret 不再是原版 10/200
+ActEntity        +16 ActType  +24 ActMemberCharaIdList  +32 MaxActTrainingLevel
+                 +36 ActTrainingState  +56 CurrentActGauge  +60 LevelUpByFriendOuting
+ActListEntity    +16 ActEntityList（IReadOnlyList<ActEntity>）  +24 ActTrainingStep
+TrainingCommandEntity  +16 CommandId  +24 _gainActGaugeAmountDict
 ```
 
-`state` 一直是 0 时，游戏里看到的一切选择都是**原版 omakase** 决定的，不能算接管。
+按 `CreateActEntityList(maxActLevel, actInfoArray, partnerArray, ...)` 的签名看，
+旧的 `ObscuredSingleModeFestaActInfo` 数组还在，只是不再挂在 DataSet 上。
+
+### 两个崩溃各算谁的
+
+| 崩溃 | 原因 |
+|---|---|
+| 开自动后闪退（`matsuri_data` 刚落盘那次） | `Data::init` 解析 7.3 MB 跑在渲染线程 → 已搬到 worker |
+| `socket hang up`（刚这次） | 我在 HTTP 线程调静态 `ActListRepository.Get()` → 游戏进程被杀 |
+
+后者不再尝试，静态方法在非主线程调用这条路封掉。
+
+### 这一版的取舍
+
+`acts: []` 是 matsuri 的合法缺省（`restore_acts` 注释：`level == 0` 表示本帧未给，
+保持默认 Lv1），不是假数据。代价写进帧的 `notes: ["dataset_missing"]`：
+
+- 演目槽 / 演目 Lv 缺失 → 稽古相关估值偏低
+- **补齐真实 acts 之前，不能拿稽古决策当真**
 
 ## 已确认的映射（游戏 2.33.2 / setting 1501）
 
@@ -47,7 +57,8 @@ matsuri-worker 线程    启动等 5 秒 → 每 3 秒 run 一次 identity→ini
 ## 支援卡读法（已实测）
 
 ```
-元素是引用（seq_item 取指针），三个字段都是 ObscuredInt、间距 20 字节：
+元素是引用（seq_item 取指针）；三个字段都是 ObscuredInt、间距 20 字节：
   +16 position   +36 supportCardId   +56 limitBreak
 卡号 = supportCardId * 10 + limitBreak
+实测 6 张：303224 303114 302754 302894 303044 303232
 ```
