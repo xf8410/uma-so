@@ -21,6 +21,13 @@
   - hook 内不做 IO（覆盖表 2 秒才重载一次，其余命中只查内存 Vec）；
   - 未命中覆盖表时原样返回 trampoline 的结果，行为与未安装时完全一致；
   - 覆盖命中数单独计数，端点可查，便于确认到底改没改到。
+
+实测记录（2026-11-27，游戏 2.33.2 / setting 1501）：
+  omakase_command 共 84 行，1501 占 15 行：
+    150101-150106 → 10    150107 → 20    150108/150109 → 0
+    150110 → 10           150120-150124 → 200（五个训练位）
+  GetBaseWeight 命中样本：150101..150108 / 150110 / 150124，ret 与表内一致。
+  SelectTraining 命中样本：arg 与 ret 同为指针（0x7943aa20f0 一类），不是索引。
 """
 
 import sys
@@ -138,18 +145,15 @@ def main() -> int:
     s = open(PATH, encoding="utf-8").read()
     before = len(s)
 
-    # ---- 1) 覆盖表实现（放在 install_weight_hook 之前）----
     anchor = "unsafe fn install_weight_hook() -> String {"
     if s.count(anchor) != 1:
         return _fail(f"anchor install_weight_hook count={s.count(anchor)}")
     s = s.replace(anchor, OVERRIDE_FN.strip() + "\n\n" + anchor, 1)
 
-    # ---- 2) hook 内接入覆盖 ----
     if s.count(HOOK_OLD) != 1:
         return _fail(f"hook body anchor count={s.count(HOOK_OLD)}")
     s = s.replace(HOOK_OLD, HOOK_NEW, 1)
 
-    # ---- 3) ENDPOINTS + 路由 ----
     anchor = '    "/api/ai/weightcalls",'
     if s.count(anchor) != 1:
         return _fail(f"anchor ENDPOINTS weightcalls count={s.count(anchor)}")
