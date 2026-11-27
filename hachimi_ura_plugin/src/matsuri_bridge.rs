@@ -26,6 +26,7 @@ use matsuri_ai::session::{ensure_data as engine_init_data, OnlineSession, Traine
 use matsuri_ai::OnlineTurnOutput;
 use matsuri_core::config::MatsuriConfig;
 use matsuri_core::data::MatsuriData;
+use matsuri_core::game::Action;
 
 /// 运行时数据根（引擎 `Data::init` 的入参；其下需有 6 张 gamedata 表）
 pub const DATA_ROOT: &str = "/sdcard/Download/uma_so/matsuri_data";
@@ -36,27 +37,63 @@ const MATSURI_CFG: &str = include_str!("../../vendor/matsuri/data/matsuri_config
 /// 引擎配置模板（sim / search / record / output；uma / cards / seed 运行时覆盖）
 const AI_CFG: &str = include_str!("../../vendor/matsuri/data/ai_config.toml");
 
+// ===== 动作标记 =====
+//
+// 把 matsuri 的 `Action` 压成一个稳定的 i32，供 hook 侧按 omakase 行检索。
+//
+// omakase 编号（实测锁定，游戏 2.33.2 / setting 1501）：
+//   150101..150105 = Train(0..4)     速 耐 力 根 智（与 training.normal[] 顺序一致）
+//   150120..150124 = ActTrain(0..4)  演目下标（与 scenario_matsuri.json acts[].train 一致）
+// 其余 150106 / 150107..150110 是休息/外出/比赛一类，暂不接管。
+pub const TAG_TRAIN_BASE: i32 = 1000;
+pub const TAG_ACTTRAIN_BASE: i32 = 2000;
+pub const TAG_RACE: i32 = 3000;
+pub const TAG_REST: i32 = 3001;
+pub const TAG_NORMAL_OUTING: i32 = 3002;
+pub const TAG_FRIEND_OUTING: i32 = 3003;
+pub const TAG_CLINIC: i32 = 3004;
+pub const TAG_ADVICE: i32 = 4000;
+
+/// matsuri 动作 → 稳定标记
+pub fn action_tag(action: &Action) -> i32 {
+    match action {
+        Action::Train(i) => TAG_TRAIN_BASE + i32::from(*i),
+        Action::ActTrain(i) => TAG_ACTTRAIN_BASE + i32::from(*i),
+        Action::Race => TAG_RACE,
+        Action::Rest => TAG_REST,
+        Action::NormalOuting => TAG_NORMAL_OUTING,
+        Action::FriendOuting => TAG_FRIEND_OUTING,
+        Action::Clinic => TAG_CLINIC,
+        Action::AssignAdvice(_) => TAG_ADVICE,
+    }
+}
+
+/// omakase 行号 → 动作标记；不是可接管的动作返回 None
+pub fn omakase_arg_to_tag(arg: i32) -> Option<i32> {
+    match arg {
+        150101..=150105 => Some(TAG_TRAIN_BASE + (arg - 150101)),
+        150120..=150124 => Some(TAG_ACTTRAIN_BASE + (arg - 150120)),
+        _ => None,
+    }
+}
+
 /// 一次决策的产物
 #[derive(Clone, Debug, Default)]
 pub struct TurnDecision {
-    /// 帧回合（0 基）
     pub turn: i32,
-    /// 育成局号
     pub epoch: u64,
-    /// `decision` / `skip`
     pub kind: &'static str,
-    /// 中选候选下标（`DecisionRecord::action_index`；`skip` 为 -1）
     pub chosen: i32,
-    /// 中选动作描述
     pub action_desc: String,
-    /// 候选总数
     pub candidate_n: usize,
-    /// 分数是否来自搜索
     pub search_backed: bool,
-    /// 跳过原因 / 附注
     pub note: String,
     /// 候选分（下标, 分数）
     pub scores: Vec<(usize, f64)>,
+    /// 候选动作标记与分数 `(tag, score)`；与 `scores` 同序但带语义
+    pub actions: Vec<(i32, f64)>,
+    /// 中选动作的标记（`skip` 为 -1）
+    pub chosen_tag: i32,
 }
 
 struct Bridge {
@@ -179,6 +216,24 @@ pub fn decide(frame_json: &str) -> Result<TurnDecision, String> {
         Some(r) => (r.action_index as i32, r.action_desc.clone()),
         None => (-1, String::new()),
     };
+
+    // 候选动作 → (tag, score)：tag 带语义，hook 侧可直接按 omakase 行检索
+    let mut actions: Vec<(i32, f64)> = Vec::with_capacity(out.actions.len());
+    for (idx, action) in out.actions.iter().enumerate() {
+        let score = out
+            .candidate_scores
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, s)| *s)
+            .unwrap_or(f64::NAN);
+        actions.push((action_tag(action), score));
+    }
+    let chosen_tag = if chosen >= 0 {
+        actions.get(chosen as usize).map(|(t, _)| *t).unwrap_or(-1)
+    } else {
+        -1
+    };
+
     let decision = TurnDecision {
         turn: out.turn,
         epoch: out.epoch,
@@ -193,6 +248,8 @@ pub fn decide(frame_json: &str) -> Result<TurnDecision, String> {
             .or_else(|| out.notes.first().cloned())
             .unwrap_or_default(),
         scores: out.candidate_scores.clone(),
+        actions,
+        chosen_tag,
     };
     if decision.chosen >= 0 {
         bridge.decided += 1;
@@ -222,41 +279,49 @@ pub fn status_json() -> String {
             DATA_ROOT, data_init
         ),
         Some(b) => {
-            let (turn, chosen, kind, note, desc) = match &b.last {
+            let (turn, chosen, kind, note, desc, tag) = match &b.last {
                 Some(d) => (
                     d.turn,
                     d.chosen,
                     d.kind,
                     d.note.clone(),
                     d.action_desc.clone(),
+                    d.chosen_tag,
                 ),
-                None => (-1, -1, "none", String::new(), String::new()),
+                None => (-1, -1, "none", String::new(), String::new(), -1),
             };
-            let scores = b
+            let acts = b
                 .last
                 .as_ref()
                 .map(|d| {
-                    d.scores
+                    d.actions
                         .iter()
-                        .map(|(i, v)| format!(r#"{{"i":{i},"v":{v:.3}}}"#))
+                        .map(|(t, s)| {
+                            if s.is_nan() {
+                                format!(r#"{{"tag":{t},"score":null}}"#)
+                            } else {
+                                format!(r#"{{"tag":{t},"score":{s:.2}}}"#)
+                            }
+                        })
                         .collect::<Vec<_>>()
                         .join(",")
                 })
                 .unwrap_or_default();
             format!(
-                r#"{{"ok":true,"ready":true,"data_init":"{}","decided":{},"skipped":{},"failed":{},"last_turn":{},"last_chosen":{},"last_kind":"{}","last_desc":"{}","last_note":"{}","search_backed":{},"candidate_n":{},"scores":[{}],"last_error":"{}"}}"#,
+                r#"{{"ok":true,"ready":true,"data_init":"{}","decided":{},"skipped":{},"failed":{},"last_turn":{},"last_chosen":{},"last_tag":{},"last_kind":"{}","last_desc":"{}","last_note":"{}","search_backed":{},"candidate_n":{},"actions":[{}],"last_error":"{}"}}"#,
                 data_init,
                 b.decided,
                 b.skipped,
                 b.failed,
                 turn,
                 chosen,
+                tag,
                 kind,
                 desc.replace('"', "'"),
                 note.replace('"', "'"),
                 b.last.as_ref().map(|d| d.search_backed).unwrap_or(false),
                 b.last.as_ref().map(|d| d.candidate_n).unwrap_or(0),
-                scores,
+                acts,
                 b.last_error.replace('"', "'"),
             )
         }
