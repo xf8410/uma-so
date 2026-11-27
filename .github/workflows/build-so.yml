@@ -60,7 +60,8 @@ jobs:
         working-directory: hachimi_ura_plugin
         run: |
           for p in ci_patch.py ci_patch2.py ci_patch3.py ci_patch4.py ci_patch5.py \
-                   ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py; do
+                   ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py \
+                   ci_patch11.py; do
             echo "--- $p"
             python3 "$p" || { echo "::error::patch failed: $p"; exit 1; }
           done
@@ -70,7 +71,7 @@ jobs:
                    "fn wb_override_lookup" "fn find_method_entry" \
                    "fn mt_recompute" "fn mt_weight_for_arg" "fn mt_read_identity" \
                    "fn mt_deck_raw_json" "fn mt_start_worker" "matsuri-worker" \
-                   "dataset_missing"; do
+                   "dataset_missing" "MT_LAST_HIT" "chara_class_mismatch"; do
             c=$(grep -c "$k" src/lib.rs)
             echo "  $k: $c"
             test "$c" -ge 1 || { echo "::error::missing $k"; exit 1; }
@@ -104,8 +105,9 @@ jobs:
             grep -aq "$k" "$SO" || { echo "::error::缺端点 $k"; exit 1; }
             echo "ok: $k"
           done
-          for k in handle_frame 候选动作为空 帧解析失败 守门 matsuri-worker dataset_missing; do
-            grep -aq "$k" "$SO" || { echo "::error::决策链/线程被裁: $k"; exit 1; }
+          for k in handle_frame 候选动作为空 帧解析失败 守门 matsuri-worker \
+                   dataset_missing chara_class_mismatch; do
+            grep -aq "$k" "$SO" || { echo "::error::决策链/门禁被裁: $k"; exit 1; }
             echo "ok: $k"
           done
           for k in omakase_command_null dict_null no_mdm_singleton weight_override.txt \
