@@ -64,11 +64,12 @@ jobs:
           python3 ci_patch3.py
           python3 ci_patch4.py
           python3 ci_patch5.py
+          python3 ci_patch6.py
           echo "--- 锚点落地检查 ---"
           for k in "mod matsuri_bridge" "fn build_matsuri_frame" "fn dump_omakase_tables" \
                    "fn get_base_weight_hook" "fn install_selector_hooks" \
                    "fn wb_override_lookup" "fn find_method_entry" \
-                   "fn mt_recompute" "fn mt_weight_for_arg"; do
+                   "fn mt_recompute" "fn mt_weight_for_arg" "fn mt_read_identity"; do
             c=$(grep -c "$k" src/lib.rs)
             echo "  $k: $c"
             test "$c" -ge 1 || { echo "::error::missing $k"; exit 1; }
@@ -98,7 +99,7 @@ jobs:
           echo "so_size=$SIZE" | tee /tmp/size.txt
           for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks \
                    api/ai/weights api/ai/tables api/ai/weightcalls api/ai/override \
-                   api/ai/entry api/ai/matsuri matsuri_data; do
+                   api/ai/entry api/ai/matsuri api/ai/deck matsuri_data; do
             grep -aq "$k" "$SO" || { echo "::error::缺端点 $k"; exit 1; }
             echo "ok: $k"
           done
