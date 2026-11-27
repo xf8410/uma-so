@@ -21,8 +21,19 @@
   3. 新增 `/api/ai/entry` 同时返回两种取法的地址，便于现场对比
      （正确时两者应相等；不等说明还有个 API 在骗人）。
 
-注意：本补丁只改 weight hook 的取址，不动其它 hook（training / ui_text 等），
-避免把别处可能"将错就错"跑通的行为一起改坏。
+范围：
+  只改 weight hook 的取址，不动其它 hook（training / ui_text 等），
+  避免把别处可能"将错就错"跑通的行为一起改坏。
+
+现场核对顺序（装新 so 之后）：
+  1. GET /api/ai/entry
+       match=true   → 两种取法一致，直接用
+       match=false  → method_pointer 才是对的，legacy 那个是坑
+  2. GET /api/ai/weightcalls
+       hits 开始涨 → hook 位置对了
+  3. GET /api/ai/override
+       applied 涨、source 显示实际读到的文件 → 覆盖表生效
+  4. 看它练哪项 → 确定 150101 的属性归属
 """
 
 import sys
@@ -73,8 +84,7 @@ unsafe fn find_method_entry(class: *mut c_void, method_name: &str, _param_count:
         let name = CStr::from_ptr(name_ptr).to_string_lossy();
         if name == method_name {
             // MethodInfo 布局：+0 = methodPointer（64 位）
-            let ptr =
-                std::ptr::read_unaligned::<*const c_void>(mi as *const *const c_void);
+            let ptr = std::ptr::read_unaligned::<*const c_void>(mi as *const *const c_void);
             if !ptr.is_null() {
                 ura_log(
                     3,
@@ -152,7 +162,7 @@ def main() -> int:
     print(f"patched {PATH}: {before} -> {len(s)} bytes")
     for needle in (
         "fn find_method_entry",
-        "find_method_entry(class, \"GetBaseWeight\"",
+        'find_method_entry(class, "GetBaseWeight"',
         "fn method_entry_probe_json",
         "/api/ai/entry",
     ):
