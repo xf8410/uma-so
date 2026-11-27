@@ -39,45 +39,37 @@ jobs:
             rm -rf umaai_next
             git clone --depth 1 https://github.com/umaai-project/umaai-next.git umaai_next
           }
-          echo "--- engine crates ---"
-          ls umaai_next/crates
-          echo "--- matsuri crates ---"
-          ls crates
-          echo "--- matsuri data ---"
-          ls -la data
+          ls umaai_next/crates; echo "---"; ls crates; echo "---"; ls -la data
       - name: vendor gamedata (引擎六表，供 include_str! 内嵌)
         run: |
           set -e
           rm -rf vendor/gamedata
           mkdir -p vendor/gamedata
           cp -v vendor/matsuri/umaai_next/gamedata/*.json vendor/gamedata/
-          ls -la vendor/gamedata
           for f in constants.json umaDB.json cardDB.json events.json text_data_dict.json manifest.json; do
             test -s "vendor/gamedata/$f" || { echo "missing gamedata/$f"; exit 1; }
           done
           for f in scenario_matsuri.json matsuri_config.toml ai_config.toml; do
             test -s "vendor/matsuri/data/$f" || { echo "missing matsuri/data/$f"; exit 1; }
           done
-          du -sh vendor/gamedata
       - name: patch engine workspace overrides
         run: |
           set -e
-          echo "--- 需要 patch 的 default-features 覆盖 ---"
           grep -rn "default-features = false" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
           sed -i -E "s/(=[[:space:]]*\{ *workspace *= *true *), *default-features *= *false/\1/" vendor/matsuri/umaai_next/crates/*/Cargo.toml
-          grep -rn "default-features" vendor/matsuri/umaai_next/crates/*/Cargo.toml || true
-      - name: patch lib.rs (matsuri_bridge + 帧构造 + hook 接线)
+      - name: patch lib.rs (bridge + 帧构造 + hook + 权重覆盖)
         working-directory: hachimi_ura_plugin
         run: |
           python3 ci_patch.py
           python3 ci_patch2.py
+          python3 ci_patch3.py
           echo "--- 锚点落地检查 ---"
-          grep -n "mod matsuri_bridge" src/lib.rs
-          grep -n "fn build_matsuri_frame" src/lib.rs
-          grep -n "fn dump_omakase_tables" src/lib.rs
-          grep -n "fn dump_omakase_dict" src/lib.rs
-          grep -n "fn install_selector_hooks" src/lib.rs
-          grep -n "fn install_weight_hook" src/lib.rs
+          grep -c "mod matsuri_bridge" src/lib.rs
+          grep -c "fn build_matsuri_frame" src/lib.rs
+          grep -c "fn dump_omakase_tables" src/lib.rs
+          grep -c "fn get_base_weight_hook" src/lib.rs
+          grep -c "fn install_selector_hooks" src/lib.rs
+          grep -c "fn wb_override_lookup" src/lib.rs
       - name: build
         working-directory: hachimi_ura_plugin
         run: |
@@ -92,48 +84,44 @@ jobs:
             exit 1
           fi
           SO=target/aarch64-linux-android/release/libhachimi_ura.so
-          ls -la "$SO"
-          sha256sum "$SO"
+          ls -la "$SO"; sha256sum "$SO"
           SIZE=$(stat -c%s "$SO")
           echo "so_size=$SIZE" | tee /tmp/size.txt
-      - name: verify（只查真正会进 .rodata 的字符串）
+      - name: verify（只查会进 .rodata 的字符串）
         working-directory: hachimi_ura_plugin
         run: |
           set -e
           SO=target/aarch64-linux-android/release/libhachimi_ura.so
           SIZE=$(stat -c%s "$SO")
-          {
-            echo "so_size=$SIZE"
-            echo "gamedata_bytes=$(du -sb ../vendor/gamedata | cut -f1)"
-          } | tee /tmp/size.txt
+          { echo "so_size=$SIZE"; echo "gamedata_bytes=$(du -sb ../vendor/gamedata | cut -f1)"; } | tee /tmp/size.txt
 
-          echo "--- 端点字面量（路由/ENDPOINTS 里，必留）---"
-          for k in api/ai/status api/ai/init api/ai/frame api/ai/decide \
-                   api/ai/hooks api/ai/weights api/ai/tables api/ai/weightcalls \
+          echo "--- 端点字面量 ---"
+          for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks \
+                   api/ai/weights api/ai/tables api/ai/weightcalls api/ai/override \
                    matsuri_data; do
             grep -aq "$k" "$SO" || { echo "::error::缺端点字面量 $k"; exit 1; }
             echo "ok: $k"
           done
 
-          echo "--- 决策链判据（b17682bf 这几项全为 0，被 LTO 裁掉）---"
-          for k in handle_frame 候选动作为空 帧解析失败 不是骏大祭的帧; do
+          echo "--- 决策链判据 ---"
+          for k in handle_frame 候选动作为空 帧解析失败; do
             grep -aq "$k" "$SO" || { echo "::error::决策链被裁: $k"; exit 1; }
             echo "ok: $k"
           done
 
-          echo "--- 权重层判据（错误串，不是符号名，strip 后仍在）---"
+          echo "--- 权重层判据 ---"
           for k in omakase_command_null dict_null no_mdm_singleton \
-                   weight\ hook trampoline_miss; do
+                   weight_override.txt trampoline_miss; do
             grep -aq "$k" "$SO" || { echo "::error::权重层被裁: $k"; exit 1; }
             echo "ok: $k"
           done
 
           if [ "${{ inputs.with_matsuri }}" != "false" ] && [ "$SIZE" -lt 9000000 ]; then
-            echo "::error::so 只有 $SIZE 字节（预期 >9MB）—— 决策栈没链接进来"
+            echo "::error::so 只有 $SIZE 字节（预期 >9MB）"
             exit 1
           fi
           echo "verify passed: $SIZE bytes"
-      - name: dump error to repo（失败时把日志落到 docs/）
+      - name: dump error to repo
         if: failure()
         run: |
           set +e
@@ -143,16 +131,11 @@ jobs:
             echo "- run: ${{ github.run_id }}"
             echo "- sha: ${{ github.sha }}"
             echo
-            echo '## 大小'
-            echo '```'
-            cat /tmp/size.txt 2>/dev/null
-            echo '```'
-            echo '## cargo error 行'
-            echo '```'
+            echo '## 大小'; echo '```'; cat /tmp/size.txt 2>/dev/null; echo '```'
+            echo '## cargo error 行'; echo '```'
             grep -nE "^error|error\[E" /tmp/build.log 2>/dev/null | head -40
             echo '```'
-            echo '## cargo 日志尾部'
-            echo '```'
+            echo '## cargo 日志尾部'; echo '```'
             tail -60 /tmp/build.log 2>/dev/null
             echo '```'
           } > docs/CI_LAST_ERROR.md
