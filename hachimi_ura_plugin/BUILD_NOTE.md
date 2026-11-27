@@ -3,29 +3,35 @@
 本文件只用来触发 `build-so` workflow（它的 `paths` 过滤只监听 `hachimi_ura_plugin/**`），
 不参与编译，可随时增删。
 
-## 2026-11-27 · ci_patch8（支援卡按 ObscuredInt 读）
+## 2026-11-27 · ci_patch9（matsuri 搬到后台线程）
 
-`/api/ai/deckraw` 的原始字节把布局定死了：
+### 闪退现场
+
+- `matsuri_data/` 目录在闪退那一刻创建，6 个文件 7.3 MB 全部落盘（含 5.7 MB text_data_dict.json）
+- `ura.log` 无崩溃记录，`/data/tombstones` 最新 11-18、`/data/anr` 最新 11-23，都不是这次
+- 插件自己装了 SIGSEGV handler，段错误被它接住后直接退出，所以系统层不留 tombstone
+
+结论：**崩在 `Data::init` 解析那 7.3 MB**，而它当时跑在 `GetBaseWeight` 的 hook 里
+（游戏渲染线程）。不是偏移问题，是线程放错。
+
+### 改法
 
 ```
-元素 = 引用（seq_item 取到有效 ptr），不是值类型内联
-对象内三个字段全是 ObscuredInt，间距 20 字节：
-  +16 position      key 444444, hidden 444445 → 1
-  +36 supportCardId key 444444, hidden 442990 → 30322
-  +56 limitBreak    key 444444, hidden 444440 → 4      → 卡号 303224
-六个元素 position 依次解出 1..6，解释成立
+hook GetBaseWeight     只读 MT_W 静态缓存，命中即返回，零计算
+matsuri-worker 线程    启动等 5 秒 → 每 3 秒 run 一次 identity→init→frame→decide
+                       → 写 MT_W；每轮 catch_unwind；栈 8 MB
 ```
 
-插件里 `IL2CPP_SUPPORT_CARD_ID_OFF=0x14 / LIMIT_OFF=0x18` 那组是紧凑布局常量，
-对这组字段不适用（用它会读到 key/hidden 的低位，也就是之前 `card:117` 那种垃圾）。
+未就绪时 hook 原样透传，行为等同没装闭环。
 
-## 状态说明（重要）
+### 判断闭环是否真的接管
 
-`/api/ai/matsuri` 的 `state` 一直是 0，因为 `cards` 之前恒为空 → matsuri 卡在编组门禁 E4。
-所以到目前为止，游戏里看到的所有选择（速度、休息、根性、稽古）**都是原版 omakase 在决定**，
-hook 只是把原值透传。这一点不能混。
+```
+/api/ai/matsuri   state 0→1，weights[] 出现 10..200 的分
+/api/ai/weightcalls  hits 涨，ret 不再是原版 10/200
+```
 
-稽古被选中是原版行为：稽古位权重 200，训练位才 10。
+`state` 一直是 0 时，游戏里看到的一切选择都是**原版 omakase** 决定的，不能算接管。
 
 ## 已确认的映射（游戏 2.33.2 / setting 1501）
 
@@ -38,11 +44,10 @@ hook 只是把原值透传。这一点不能混。
 150120..150124 → ActTrain(0..4)  演目下标，与 acts[].train 一致
 ```
 
-## 装 so 之后的核对顺序
+## 支援卡读法（已实测）
 
 ```
-1. /api/ai/deck        uma + cards[6] 是否就是本局的马娘与六张卡
-2. /api/ai/matsuri     state 从 0 变 1，weights[] 出现非 0
-3. /api/ai/weightcalls hits 涨，ret 不再是 10/200 这种原版值
-4. 观察训练选择是否跟着 matsuri 的 weights 走
+元素是引用（seq_item 取指针），三个字段都是 ObscuredInt、间距 20 字节：
+  +16 position   +36 supportCardId   +56 limitBreak
+卡号 = supportCardId * 10 + limitBreak
 ```
