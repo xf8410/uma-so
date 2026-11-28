@@ -48,9 +48,10 @@ jobs:
           for f in constants.json umaDB.json cardDB.json events.json text_data_dict.json manifest.json; do
             test -s "vendor/gamedata/$f" || { echo "missing gamedata/$f"; exit 1; }
           done
-          for f in scenario_matsuri.json matsuri_config.toml ai_config.toml; do
+          for f in scenario_matsuri.json matsuri_config.toml ai_config.toml distilled.toml; do
             test -s "vendor/matsuri/data/$f" || { echo "missing matsuri/data/$f"; exit 1; }
           done
+          python3 hachimi_ura_plugin/patch_gamedata.py
       - name: patch engine workspace overrides
         run: |
           set -e
@@ -61,22 +62,28 @@ jobs:
         run: |
           for p in ci_patch.py ci_patch2.py ci_patch3.py ci_patch4.py ci_patch5.py \
                    ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py \
-                   ci_patch11.py ci_patch12_pre.py ci_patch12.py ci_patch12b.py ci_patch12c.py; do
+                   ci_patch11.py ci_patch12.py ci_patch13.py ci_patch14.py ci_patch15.py \
+                   ci_patch16.py ci_patch17.py ci_patch18.py ci_patch19.py; do
             echo "--- $p"
-            python3 "$p" 2>&1 | tee -a /tmp/patch.log
-            test "${PIPESTATUS[0]}" -eq 0 || { echo "::error::patch failed: $p"; exit 1; }
+            python3 "$p" || { echo "::error::patch failed: $p"; exit 1; }
           done
           echo "--- 锚点落地检查 ---"
           for k in "mod matsuri_bridge" "fn build_matsuri_frame" "fn dump_omakase_tables" \
                    "fn get_base_weight_hook" "fn install_selector_hooks" \
                    "fn wb_override_lookup" "fn find_method_entry" \
                    "fn mt_recompute" "fn mt_weight_for_arg" "fn mt_read_identity" \
-                   "fn read_inline_obscured_int_array" "fn mt_thread_attach" \
-                   "fn push_read_enabled" "has_act_candidates" \
                    "fn mt_deck_raw_json" "fn mt_start_worker" "matsuri-worker" \
                    "dataset_missing" "MT_LAST_HIT" "chara_class_mismatch" \
-                   "install_recoverable_sigaction" "restore_and_reraise" \
-                   "has_train_candidates" "fn mt_arg_to_tag" "for i in 10..15"; do
+                   "fn read_inline_obscured_int_array" "fn ensure_il2cpp_thread_attached" \
+                   "SIGSEGV_RECOVERY_TID" "PUSH_READ_ENABLED" "OLD_SIGSEGV_ACT" \
+                   "read_inline_obscured_int_array(chara_effect_ids_arr)" "playing_state" \
+                   "has_act_cand" "festa_dataset_live" "fn mt_peek_turn_fast" \
+                   "MT_STALE_SKIPS" "MT_SYNC_WAITS" "fn read_obscured_bool_at" \
+                   "AtomicI32; 15" "TAG_FRIEND_OUTING" \
+                   "best_is_non_train" "raceHistory" "advice_pending" \
+                   "festa_attach_advice_hook_handler" "festa_fusion_advice_hook_handler" \
+                   "story_try_choice_hook_handler" "build_live_story_json" \
+                   "find_method_entry_exact"; do
             c=$(grep -c "$k" src/lib.rs)
             echo "  $k: $c"
             test "$c" -ge 1 || { echo "::error::missing $k"; exit 1; }
@@ -106,13 +113,15 @@ jobs:
           echo "so_size=$SIZE" | tee /tmp/size.txt
           for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks \
                    api/ai/weights api/ai/tables api/ai/weightcalls api/ai/override \
-                   api/ai/entry api/ai/matsuri api/ai/deck api/ai/deckraw matsuri_data; do
+                   api/ai/entry api/ai/matsuri api/ai/deck api/ai/deckraw \
+                   api/push/read matsuri_data crash_sig.log; do
             grep -aq "$k" "$SO" || { echo "::error::缺端点 $k"; exit 1; }
             echo "ok: $k"
           done
           for k in handle_frame 候选动作为空 帧解析失败 守门 matsuri-worker \
-                   dataset_missing chara_class_mismatch il2cpp_thread_attach \
-                   push_read.txt uma_so/matsuri_data; do
+                   dataset_missing chara_class_mismatch sigsegv_recovered_in_worker \
+                   il2cpp_thread_attach Android/data/jp.co.cygames.umamusume/files/uma_so/matsuri_data \
+                   30323 festa_dataset_live stale_skips matsuri-rayon; do
             grep -aq "$k" "$SO" || { echo "::error::决策链/门禁被裁: $k"; exit 1; }
             echo "ok: $k"
           done
@@ -137,7 +146,6 @@ jobs:
             grep -nE "^error|error\[E" /tmp/build.log 2>/dev/null | head -40
             echo '```'
             echo '## cargo 尾部'; echo '```'; tail -60 /tmp/build.log 2>/dev/null; echo '```'
-            echo '## patch 尾部'; echo '```'; tail -50 /tmp/patch.log 2>/dev/null; echo '```'
           } > docs/CI_LAST_ERROR.md
           git config user.name "ci-bot"; git config user.email "ci@local"
           git add docs/CI_LAST_ERROR.md
