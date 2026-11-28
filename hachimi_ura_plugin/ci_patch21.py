@@ -56,20 +56,21 @@ extern "C" fn get_filter_data_list_hook(
     method_info: *const c_void,
 ) -> *mut c_void {
     use std::sync::atomic::Ordering::Relaxed;
-    let trampoline = interceptor_get_trampoline(get_filter_data_list_hook as *const () as usize);
-    if trampoline == 0 {
-        return std::ptr::null_mut();
-    }
-    type FnType = unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void;
-    let original: FnType = std::mem::transmute(trampoline);
-    let list = unsafe { original(this, method_info) };
-    let hit = FILTERDL_HITS.fetch_add(1, Relaxed) + 1;
-    if list.is_null() {
-        return list;
-    }
-    let cnt = unsafe { read_int_at(list as *const c_void, IL2CPP_LIST_COUNT_OFF as i32) };
-    if hit <= 5 {
-        unsafe {
+    unsafe {
+        let trampoline =
+            interceptor_get_trampoline(get_filter_data_list_hook as *const () as usize);
+        if trampoline == 0 {
+            return std::ptr::null_mut();
+        }
+        type FnType = unsafe extern "C" fn(*mut c_void, *const c_void) -> *mut c_void;
+        let original: FnType = std::mem::transmute(trampoline);
+        let list = original(this, method_info);
+        let hit = FILTERDL_HITS.fetch_add(1, Relaxed) + 1;
+        if list.is_null() {
+            return list;
+        }
+        let cnt = read_int_at(list as *const c_void, IL2CPP_LIST_COUNT_OFF as i32);
+        if hit <= 5 {
             ura_log(
                 3,
                 &format!(
@@ -78,15 +79,13 @@ extern "C" fn get_filter_data_list_hook(
                 ),
             );
         }
-    }
-    if (1..=256).contains(&cnt) {
-        unsafe {
+        if (1..=256).contains(&cnt) {
             let size_ptr = (list as usize + IL2CPP_LIST_COUNT_OFF) as *mut i32;
             std::ptr::write(size_ptr, 0);
+            FILTERDL_CLEARED.fetch_add(1, Relaxed);
         }
-        FILTERDL_CLEARED.fetch_add(1, Relaxed);
+        list
     }
-    list
 }
 
 unsafe fn install_filter_data_list_hook() -> String {
@@ -190,7 +189,7 @@ def main() -> int:
         "install_filter_data_list_hook();",
         "/api/ai/filter",
         "GetFilterDataList",
-        "next_w[b] = 100_000",
+        "= 100_000;",
     ):
         hits = sum(1 for line in s.splitlines() if needle in line)
         print(f"  {needle}: {hits}")
