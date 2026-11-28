@@ -1,7 +1,7 @@
 # CI 最近一次失败日志
 
-- run: 46110360564
-- sha: 6cdc2fa4cea4031e40bb7c0c80a81c3eb4501b7b
+- run: 46110706229
+- sha: 9eb276bb2fba1f5ccaef3b0d61642abcb1137a51
 
 ## 大小
 ```
@@ -14,27 +14,6 @@
 ```
 ## patch 尾部
 ```
-  /api/ai/tables: 2 line(s)
-  /api/ai/weightcalls: 2 line(s)
-patched src/lib.rs: 1034738 -> 1038049 bytes
-  WB_OVR_PATHS: 3 line(s)
-  Android/data/jp.co.cygames.umamusume/files/uma_so: 1 line(s)
-  fn wb_override_lookup: 1 line(s)
-  wb_override_lookup(arg0): 1 line(s)
-  /api/ai/override: 2 line(s)
-patched src/lib.rs: 1038049 -> 1040892 bytes
-  fn find_method_entry: 1 line(s)
-  find_method_entry(class, "GetBaseWeight": 2 line(s)
-  fn method_entry_probe_json: 1 line(s)
-  /api/ai/entry: 2 line(s)
-patched src/lib.rs: 1040892 -> 1046117 bytes
-  fn mt_recompute: 1 line(s)
-  fn mt_weight_for_arg: 1 line(s)
-  fn mt_json: 1 line(s)
-  mt_weight_for_arg(arg0): 1 line(s)
-  /api/ai/matsuri: 2 line(s)
-patched src/lib.rs: 1046117 -> 1049495 bytes
-  struct MtIdentity: 1 line(s)
   fn mt_read_identity: 1 line(s)
   fn mt_deck_json: 1 line(s)
   mt_read_identity(): 3 line(s)
@@ -63,5 +42,26 @@ patched src/lib.rs: 1055879 -> 1057226 bytes
   MT_LAST_HIT: 3 line(s)
   idle: 14 line(s)
   chara_class_mismatch: 3 line(s)
-::error::ci_patch12: P2 sigsetjmp call sites=2（应 >= 10） | file=src/lib.rs anchor_head='// ★ v3.22.35: If sigsetjmp was set (push thread), longjmp back instead of killing process' hit_lines=[1611]
+ci_patch12_pre: patched ci_patch12.py (regex/threshold)
+  P2 sigsetjmp call sites: 10
+patched src/lib.rs: 1057226 -> 1064177 bytes
+patched src/matsuri_bridge.rs: 10987 -> 12007 bytes
+  lib · fn read_obscured_int_array: 2
+  lib · read_obscured_int_array(chara_effect_ids_arr): 1
+  lib · SIGSEGV_TID: 12
+  lib · [u8; 320]: 1
+  lib · fn mt_thread_attach: 1
+  lib · mt_thread_attach();: 1
+  lib · fn push_read_enabled: 1
+  lib · push_read_enabled(): 2
+  lib · install_weight_hook();: 1
+  lib · has_act_candidates: 3
+  lib · MT_GEN: 4
+  lib · find_method_entry(class, "SelectTraining", 1): 1
+  bridge · Android/data/jp.co.cygames.umamusume/files/uma_so/matsuri_data: 1
+  bridge · static DATA_INIT: Mutex<bool>: 1
+  bridge · fn ensure_assets: 1
+  bridge · fn ensure_data: 1
+  keep · handle_frame: 0
+::error::ci_patch12: verify 字面量 handle_frame 丢了
 ```
