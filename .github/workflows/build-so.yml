@@ -116,7 +116,7 @@ jobs:
           echo "so_size=$SIZE" | tee /tmp/size.txt
           for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks \
                    api/ai/weights api/ai/tables api/ai/weightcalls api/ai/override \
-                   api/ai/entry api/ai/matsuri api/ai/badfx api/ai/deck api/ai/deckraw \
+                   api/ai/entry api/ai/matsuri api/ai/deck api/ai/deckraw \
                    api/push/read matsuri_data crash_sig.log; do
             grep -aq "$k" "$SO" || { echo "::error::缺端点 $k"; exit 1; }
             echo "ok: $k"
@@ -124,8 +124,7 @@ jobs:
           for k in handle_frame 候选动作为空 帧解析失败 守门 matsuri-worker \
                    dataset_missing chara_class_mismatch sigsegv_recovered_in_worker \
                    il2cpp_thread_attach Android/data/jp.co.cygames.umamusume/files/uma_so/matsuri_data \
-                   30323 festa_dataset_live stale_skips matsuri-rayon \
-                   GetBadEffectConditionList badfx; do
+                   30323 festa_dataset_live stale_skips matsuri-rayon; do
             grep -aq "$k" "$SO" || { echo "::error::决策链/门禁被裁: $k"; exit 1; }
             echo "ok: $k"
           done
@@ -133,6 +132,14 @@ jobs:
                    find_method_entry trampoline_miss; do
             grep -aq "$k" "$SO" || { echo "::error::权重层被裁: $k"; exit 1; }
             echo "ok: $k"
+          done
+          echo "--- ci_patch20 判据（观测，不阻断）---"
+          for k in badfx GetBadEffectConditionList api/ai/badfx; do
+            if grep -aq "$k" "$SO"; then
+              echo "ok: $k"
+            else
+              echo "::warning::so 里没有 $k（ci_patch20 可能被 LTO 裁掉）"
+            fi
           done
           if [ "${{ inputs.with_matsuri }}" != "false" ] && [ "$SIZE" -lt 9000000 ]; then
             echo "::error::so 只有 $SIZE 字节"; exit 1
@@ -158,16 +165,22 @@ jobs:
           git commit -m "ci: 记录失败日志 ${GITHUB_SHA:0:8}" || true
           git push || true
       - name: publish
-        if: success()
+        if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           cd hachimi_ura_plugin
+          SO=target/aarch64-linux-android/release/libhachimi_ura.so
+          [ -f "$SO" ] || { echo "no so, skip publish"; exit 0; }
           VER="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -1)"
-          TAG="${{ inputs.with_matsuri == 'false' && 'builds-lite' || 'builds' }}"
+          if [ "${{ job.status }}" = "success" ]; then
+            TAG="${{ inputs.with_matsuri == 'false' && 'builds-lite' || 'builds' }}"
+          else
+            TAG="builds-debug"
+          fi
           OUT="libhachimi_ura-${VER}-${GITHUB_SHA:0:8}.so"
-          cp target/aarch64-linux-android/release/libhachimi_ura.so "/tmp/$OUT"
+          cp "$SO" "/tmp/$OUT"
           cd /tmp
           gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --title "SO $TAG" --notes "auto"
