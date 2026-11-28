@@ -1,0 +1,52 @@
+name: sync-upstream
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/sync-upstream.yml"
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+      - name: fetch upstream (delightedMaster/uma-so)
+        run: |
+          set -e
+          git clone --depth 1 https://github.com/delightedMaster/uma-so.git /tmp/up
+          ls /tmp/up
+          ls /tmp/up/hachimi_ura_plugin | head -40
+      - name: mirror plugin tree
+        run: |
+          set -e
+          # 插件目录整体替换（含 src/、全部 ci_patch*.py、gamedata patch 数据、Cargo.toml）
+          rm -rf hachimi_ura_plugin
+          cp -a /tmp/up/hachimi_ura_plugin hachimi_ura_plugin
+          # 顶层基线与文档
+          cp -a /tmp/up/README.md README.md
+          cp -a /tmp/up/hlpatch_endpoints.txt hlpatch_endpoints.txt
+          cp -a /tmp/up/rust-toolchain.toml rust-toolchain.toml
+          rm -rf docs && cp -a /tmp/up/docs docs
+          # workflow 只同步上游的构建流程（本文件自身不覆盖）
+          for f in /tmp/up/.github/workflows/*.yml; do
+            b=$(basename "$f")
+            [ "$b" = "sync-upstream.yml" ] && continue
+            cp -a "$f" ".github/workflows/$b"
+          done
+          git status --short | head -40
+      - name: commit and push
+        run: |
+          set -e
+          git config user.name "sync-bot"
+          git config user.email "sync-bot@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "already in sync"
+            exit 0
+          fi
+          git commit -m "chore: 同步 delightedMaster/uma-so（ci_patch12–18 + gamedata patch + 文档）"
+          git push
