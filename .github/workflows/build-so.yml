@@ -109,6 +109,7 @@ jobs:
       - name: verify
         working-directory: hachimi_ura_plugin
         run: |
+          exec > >(tee /tmp/verify.log) 2>&1
           set -e
           SO=target/aarch64-linux-android/release/libhachimi_ura.so
           SIZE=$(stat -c%s "$SO")
@@ -148,8 +149,9 @@ jobs:
             echo '## cargo error'; echo '```'
             grep -nE "^error|error\[E" /tmp/build.log 2>/dev/null | head -40
             echo '```'
-            echo '## cargo 尾部'; echo '```'; tail -60 /tmp/build.log 2>/dev/null; echo '```'
-            echo '## patch 尾部'; echo '```'; tail -60 /tmp/patch.log 2>/dev/null; echo '```'
+            echo '## cargo 尾部'; echo '```'; tail -30 /tmp/build.log 2>/dev/null; echo '```'
+            echo '## patch 尾部'; echo '```'; tail -25 /tmp/patch.log 2>/dev/null; echo '```'
+            echo '## verify 尾部'; echo '```'; tail -40 /tmp/verify.log 2>/dev/null; echo '```'
           } > docs/CI_LAST_ERROR.md
           git config user.name "ci-bot"; git config user.email "ci@local"
           git add docs/CI_LAST_ERROR.md
