@@ -21,11 +21,12 @@ matsuri-core = { path = "../vendor/matsuri/crates/matsuri-core", optional = true
 matsuri-ai = { path = "../vendor/matsuri/crates/matsuri-ai", optional = true }
 umaai = { path = "../vendor/matsuri/umaai_next/crates/umaai", optional = true }
 toml = { version = "0.9", optional = true }
+rayon = { version = "1.12", optional = true }
 
 [features]
 default = []
 # 打开后把完整 matsuri 决策栈（在线档）真正编进来
-matsuri = ["dep:matsuri-core", "dep:matsuri-ai", "dep:umaai", "dep:toml"]
+matsuri = ["dep:matsuri-core", "dep:matsuri-ai", "dep:umaai", "dep:toml", "dep:rayon"]
 
 [profile.release]
 opt-level = 3
