@@ -1,16 +1,49 @@
 # CI 最近一次失败日志
 
-- run: 46184979552
-- sha: 19e6c86b63ebdea72d9ec088ed1735c9cffbd813
+- run: 46185470215
+- sha: 0aef83a9947ec2ada0cfc60ac05d57e0a942557f
 
 ## 大小
 ```
 ```
 ## cargo error
 ```
+328:error[E0133]: call to unsafe function `interceptor_get_trampoline` is unsafe and requires unsafe function or block
+336:error[E0133]: call to unsafe function `std::intrinsics::transmute` is unsafe and requires unsafe function or block
+517:error: could not compile `hachimi_ura` (lib) due to 2 previous errors; 26 warnings emitted
 ```
 ## cargo 尾部
 ```
+      |                    help: remove this `mut`
+
+warning: value assigned to `all_events_count` is never read
+     --> src/lib.rs:25436:37
+      |
+25436 |       let mut all_events_count: i32 = 0;
+      |                                       ^ this value is reassigned later and never used
+...
+25475 | /             all_events_count = conn
+25476 | |                 .query_row("SELECT COUNT(*) FROM single_mode_story_data", [], |r| {
+25477 | |                     r.get(0)
+25478 | |                 })
+25479 | |                 .unwrap_or(0);
+      | |_____________________________- `all_events_count` is overwritten here before the previous value is read
+
+warning: unused variable: `ds_class`
+     --> src/lib.rs:25965:9
+      |
+25965 |     let ds_class = get_class_from_object(ds_obj);
+      |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ds_class`
+
+warning: unused variable: `is_literal`
+     --> src/lib.rs:26987:13
+      |
+26987 |         let is_literal = match field_get_flags {
+      |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_literal`
+
+For more information about this error, try `rustc --explain E0133`.
+warning: `hachimi_ura` (lib) generated 26 warnings
+error: could not compile `hachimi_ura` (lib) due to 2 previous errors; 26 warnings emitted
 ```
 ## patch 尾部
 ```
