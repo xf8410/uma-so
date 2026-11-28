@@ -63,7 +63,7 @@ jobs:
           for p in ci_patch.py ci_patch2.py ci_patch3.py ci_patch4.py ci_patch5.py \
                    ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py \
                    ci_patch11.py ci_patch12.py ci_patch13.py ci_patch14.py ci_patch15.py \
-                   ci_patch16.py ci_patch17.py ci_patch18.py ci_patch19.py; do
+                   ci_patch16.py ci_patch17.py ci_patch18.py ci_patch19.py ci_patch20.py; do
             echo "--- $p"
             python3 "$p" || { echo "::error::patch failed: $p"; exit 1; }
           done
@@ -83,7 +83,8 @@ jobs:
                    "best_is_non_train" "raceHistory" "advice_pending" \
                    "festa_attach_advice_hook_handler" "festa_fusion_advice_hook_handler" \
                    "story_try_choice_hook_handler" "build_live_story_json" \
-                   "find_method_entry_exact"; do
+                   "find_method_entry_exact" "fn install_bad_effect_filter_hook" \
+                   "GetBadEffectConditionList" "/api/ai/badfx"; do
             c=$(grep -c "$k" src/lib.rs)
             echo "  $k: $c"
             test "$c" -ge 1 || { echo "::error::missing $k"; exit 1; }
@@ -113,7 +114,7 @@ jobs:
           echo "so_size=$SIZE" | tee /tmp/size.txt
           for k in api/ai/status api/ai/init api/ai/frame api/ai/decide api/ai/hooks \
                    api/ai/weights api/ai/tables api/ai/weightcalls api/ai/override \
-                   api/ai/entry api/ai/matsuri api/ai/deck api/ai/deckraw \
+                   api/ai/entry api/ai/matsuri api/ai/badfx api/ai/deck api/ai/deckraw \
                    api/push/read matsuri_data crash_sig.log; do
             grep -aq "$k" "$SO" || { echo "::error::缺端点 $k"; exit 1; }
             echo "ok: $k"
@@ -121,7 +122,8 @@ jobs:
           for k in handle_frame 候选动作为空 帧解析失败 守门 matsuri-worker \
                    dataset_missing chara_class_mismatch sigsegv_recovered_in_worker \
                    il2cpp_thread_attach Android/data/jp.co.cygames.umamusume/files/uma_so/matsuri_data \
-                   30323 festa_dataset_live stale_skips matsuri-rayon; do
+                   30323 festa_dataset_live stale_skips matsuri-rayon \
+                   GetBadEffectConditionList badfx; do
             grep -aq "$k" "$SO" || { echo "::error::决策链/门禁被裁: $k"; exit 1; }
             echo "ok: $k"
           done
