@@ -1,16 +1,22 @@
 #!/usr/bin/env python3
 """ci_patch12 的前置修补：幂等、只动 CI 工作区里的副本（不改仓库里的文件）。
 
-三处修正：
+四处修正：
 
-1. `ci_patch12.py` 第一版把 sigsetjmp 的正则写成了 `(?:jm|jump)_result`（漏了一个 p），
-   只命中 `jump_result` 那 2 处，于是 `hits < 10` 直接失败 → 改正拼写并把阈值放到 8。
-2. `keep ·` 那组字面量（`handle_frame` / `候选动作为空` / `帧解析失败` / `守门` / …）
-   有一半来自 `matsuri_bridge.rs` 的调用链（`session.handle_frame`），只扫 `src/lib.rs`
-   会误判 → 改成在 `lib + bridge` 合并文本上扫。
-3. 合并文本里仍找不到的（如 `候选动作为空` / `帧解析失败` / `守门`，它们是上游 crate
-   的错误文案，只存在于最终 `.so` 里）不该判失败 —— 自检降级为 warning，
-   真正的存活判据交给 verify 阶段对 `.so` 的 `grep -a`。
+1. 函数重名：`src/lib.rs` 里**已经**有一个
+   `read_obscured_int_array(class, obj, getter_name) -> Vec<i32>`（3 参，走 getter 反射）。
+   ci_patch12 新加的 1 参版本与之撞名，导致
+   `E0428 defined multiple times` + 3 处 `E0061 takes 1 argument but 3 supplied`。
+   → 新函数改名为 `read_inline_obscured_int_array`（与 QQ 侧故障 #10 的命名一致）。
+
+2. `ci_patch12.py` 第一版把 sigsetjmp 的正则写成了 `(?:jm|jump)_result`（漏一个 p），
+   只命中 `jump_result` 那 2 处 → 改正并把阈值放到 8。
+
+3. `keep ·` 那组字面量有一半来自 `matsuri_bridge.rs`（`session.handle_frame`），
+   只扫 `src/lib.rs` 会误判 → 改成在 `lib + bridge` 合并文本上扫。
+
+4. 合并文本里仍没有的（`候选动作为空` / `帧解析失败` / `守门` 是上游 crate 的错误文案，
+   只存在于 `.so`）不判失败 → 降级为 warning，存活判据交给 verify 扫 `.so`。
 """
 
 import sys
@@ -20,12 +26,15 @@ PATH = "ci_patch12.py"
 s = open(PATH, encoding="utf-8").read()
 before = s
 
-# 1) sigsetjmp 正则拼写 + 阈值
+# 1) 避开与既有 3 参 read_obscured_int_array 撞名
+s = s.replace("read_obscured_int_array", "read_inline_obscured_int_array")
+
+# 2) sigsetjmp 正则拼写 + 阈值
 s = s.replace("(?:jm|jump)_result", "(?:jmp|jump)_result")
 s = s.replace("if hits < 10:", "if hits < 8:")
 s = s.replace("（应 >= 10）", "（应 >= 8）")
 
-# 2) keep 字面量在 lib + bridge 上扫
+# 3) keep 字面量在 lib + bridge 上扫
 keep_old = (
     'hits = sum(1 for line in lib.splitlines() if needle in line)\n'
     '        print(f"  keep · {needle}: {hits}")'
@@ -39,7 +48,7 @@ if keep_old in s:
 else:
     print("ci_patch12_pre: keep-scan anchor not found (可能是已修过的版本)")
 
-# 3) keep 不存在不判失败，交给 verify 扫 .so
+# 4) keep 不存在不判失败，交给 verify 扫 .so
 fail_old = (
     '        if hits == 0:\n'
     '            return _fail(f"verify 字面量 {needle} 丢了")'
