@@ -162,15 +162,14 @@ fn badfx_json() -> String {
 
 '''
 
-CALL_OLD = r'''fn mt_start_worker() {
-    use std::sync::atomic::Ordering::Relaxed;'''
+CALL_OLD = r'''fn mt_start_worker() {'''
 
 CALL_NEW = r'''fn mt_start_worker() {
     // ★ v3.31.0：装失败率过滤 hook（失败即回到原行为，不阻塞启动）
+    // 放在函数体最前面：ci_patch16 已把这里的 use 行改成 {Acquire, Relaxed}，不要再绑那一行
     unsafe {
         let _ = install_bad_effect_filter_hook();
-    }
-    use std::sync::atomic::Ordering::Relaxed;'''
+    }'''
 
 ROUTE_OLD = '    } else if path == "/api/ai/matsuri" {'
 
