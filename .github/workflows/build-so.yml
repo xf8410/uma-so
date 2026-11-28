@@ -63,7 +63,8 @@ jobs:
                    ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py \
                    ci_patch11.py ci_patch12.py; do
             echo "--- $p"
-            python3 "$p" || { echo "::error::patch failed: $p"; exit 1; }
+            python3 "$p" 2>&1 | tee -a /tmp/patch.log
+            test "${PIPESTATUS[0]}" -eq 0 || { echo "::error::patch failed: $p"; exit 1; }
           done
           echo "--- 锚点落地检查 ---"
           for k in "mod matsuri_bridge" "fn build_matsuri_frame" "fn dump_omakase_tables" \
@@ -134,6 +135,7 @@ jobs:
             grep -nE "^error|error\[E" /tmp/build.log 2>/dev/null | head -40
             echo '```'
             echo '## cargo 尾部'; echo '```'; tail -60 /tmp/build.log 2>/dev/null; echo '```'
+            echo '## patch 尾部'; echo '```'; tail -50 /tmp/patch.log 2>/dev/null; echo '```'
           } > docs/CI_LAST_ERROR.md
           git config user.name "ci-bot"; git config user.email "ci@local"
           git add docs/CI_LAST_ERROR.md
