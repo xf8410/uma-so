@@ -61,7 +61,7 @@ jobs:
         run: |
           for p in ci_patch.py ci_patch2.py ci_patch3.py ci_patch4.py ci_patch5.py \
                    ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py \
-                   ci_patch11.py ci_patch12.py; do
+                   ci_patch11.py ci_patch12_pre.py ci_patch12.py; do
             echo "--- $p"
             python3 "$p" 2>&1 | tee -a /tmp/patch.log
             test "${PIPESTATUS[0]}" -eq 0 || { echo "::error::patch failed: $p"; exit 1; }
