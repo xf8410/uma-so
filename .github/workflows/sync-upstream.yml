@@ -1,9 +1,11 @@
 name: sync-upstream
 # 把 delightedMaster/uma-so（朋友维护的主线）镜像回本仓。
 #
-# 注意：GITHUB_TOKEN **不能**改 `.github/workflows/*`（GitHub 硬限制，需要 PAT 的
-# workflow scope），所以这里只镜像 `hachimi_ura_plugin/`、`docs/` 与几个顶层文件；
-# build-so.yml 已按上游内容手工对齐（ci_patch12..19 + patch_gamedata + 上游判据）。
+# 注意：
+# 1. GITHUB_TOKEN **不能**改 `.github/workflows/*`（GitHub 硬限制），所以这里只镜像
+#    `hachimi_ura_plugin/`、`docs/`、`tools/` 与几个顶层文件；build-so.yml 已手工对齐。
+# 2. 用「合并覆盖」而不是「删除重建」——本仓独有的补丁（如 ci_patch20）要保留下来，
+#    否则每次同步都会被上游抹掉。
 on:
   workflow_dispatch:
   push:
@@ -25,20 +27,23 @@ jobs:
           git clone --depth 1 https://github.com/delightedMaster/uma-so.git /tmp/up
           echo "upstream head: $(git -C /tmp/up rev-parse --short HEAD)"
           ls /tmp/up/hachimi_ura_plugin | head -40
-      - name: mirror plugin tree + docs
+      - name: merge upstream plugin tree + docs
         run: |
           set -e
-          # 插件目录整体替换（src/、全部 ci_patch*.py、gamedata patch 数据、Cargo.toml）
-          rm -rf hachimi_ura_plugin
-          cp -a /tmp/up/hachimi_ura_plugin hachimi_ura_plugin
-          # 顶层基线与文档
+          mkdir -p hachimi_ura_plugin
+          # 合并覆盖：上游文件更新到最新，本仓独有文件（ci_patch20.py 等）保留
+          cp -a /tmp/up/hachimi_ura_plugin/. hachimi_ura_plugin/
           cp -a /tmp/up/README.md README.md
           cp -a /tmp/up/hlpatch_endpoints.txt hlpatch_endpoints.txt
           cp -a /tmp/up/rust-toolchain.toml rust-toolchain.toml
-          rm -rf docs
-          cp -a /tmp/up/docs docs
-          rm -rf tools
-          cp -a /tmp/up/tools tools 2>/dev/null || true
+          mkdir -p docs tools
+          cp -a /tmp/up/docs/. docs/
+          cp -a /tmp/up/tools/. tools/ 2>/dev/null || true
+          echo "--- 本仓独有（上游没有）的补丁 ---"
+          for f in hachimi_ura_plugin/ci_patch*.py; do
+            b=$(basename "$f")
+            [ -f "/tmp/up/hachimi_ura_plugin/$b" ] || echo "  local-only: $b"
+          done
           git status --short | head -60
       - name: commit and push
         run: |
@@ -50,5 +55,5 @@ jobs:
             echo "already in sync"
             exit 0
           fi
-          git commit -m "chore: 同步 delightedMaster/uma-so（ci_patch12–19 + gamedata patch + docs）"
+          git commit -m "chore: 同步 delightedMaster/uma-so（合并覆盖，保留本仓独有补丁）"
           git push
