@@ -438,6 +438,7 @@ P6_BOOT_OLD = r'''    // ★ Initial push: try pushing current data on startup
                 ura_log(3, "Push: game detected via probe (no callback)");
                 // v3.22.98: Install hooks in fallback (on_game_initialized may never fire)
                 install_training_hook();
+                install_selector_hooks();
                 install_exec_training_hook();
                 install_failure_rate_hook();
                 install_event_choice_hook();
@@ -476,6 +477,7 @@ P6_BOOT_NEW = r'''    // ★ v3.30.1: 启动阶段不再用 read_summary() 盲�
             unsafe {
                 ura_log(3, "Push: IL2CPP ready (class resolvable), installing hooks");
                 install_training_hook();
+                install_selector_hooks();
                 install_exec_training_hook();
                 install_failure_rate_hook();
                 install_event_choice_hook();
@@ -603,27 +605,50 @@ P7_NEW = r'''    // ★ v3.30.1: 区分「训练槽」与「稽古槽」，别�
     let _ = MT_GEN.fetch_add(1, Relaxed);'''
 
 
+# 诊断用：记录当前在验的锚点，失败时把「锚点首行」在文件里命中的行号打出来，
+# 这样 CI 日志里能直接看出是「锚点漂了」还是「改了别的 patch」。
+_CUR: dict = {"src": "", "anchor": "", "file": ""}
+
+
+def _mark(anchor: str) -> None:
+    _CUR["anchor"] = anchor
+
+
 def _fail(msg: str) -> int:
-    print(f"::error::ci_patch12: {msg}")
+    a = _CUR.get("anchor") or ""
+    src = _CUR.get("src") or ""
+    file = _CUR.get("file") or ""
+    if a:
+        head = a.strip().split("\n")[0][:90]
+        lines = [i + 1 for i, line in enumerate(src.split("\n")) if head and head in line]
+        print(f"::error::ci_patch12: {msg} | file={file} anchor_head={head!r} hit_lines={lines[:6]}")
+    else:
+        print(f"::error::ci_patch12: {msg}")
     return 1
 
 
 def patch_lib() -> int:
     s = open(PATH, encoding="utf-8").read()
     before = len(s)
+    _CUR["src"] = s
+    _CUR["file"] = PATH
 
     # ---- P1 ----
+    _mark(P1_ANCHOR)
     if s.count(P1_ANCHOR) != 1:
         return _fail(f"P1 anchor count={s.count(P1_ANCHOR)}")
     s = s.replace(P1_ANCHOR, P1_FN + P1_ANCHOR, 1)
+    _mark(P1_CALL_OLD)
     if s.count(P1_CALL_OLD) != 1:
         return _fail(f"P1 call anchor count={s.count(P1_CALL_OLD)}")
     s = s.replace(P1_CALL_OLD, P1_CALL_NEW, 1)
 
     # ---- P2 ----
+    _mark(P2_BUF_OLD)
     if s.count(P2_BUF_OLD) != 1:
         return _fail(f"P2 buf anchor count={s.count(P2_BUF_OLD)}")
     s = s.replace(P2_BUF_OLD, P2_BUF_NEW, 1)
+    _mark(P2_HANDLER_OLD)
     if s.count(P2_HANDLER_OLD) != 1:
         return _fail(f"P2 handler anchor count={s.count(P2_HANDLER_OLD)}")
     s = s.replace(P2_HANDLER_OLD, P2_HANDLER_NEW, 1)
@@ -647,45 +672,57 @@ def patch_lib() -> int:
     s = "\n".join(lines)
 
     # ---- P3 ----
+    _mark(P3_ANCHOR)
     if s.count(P3_ANCHOR) != 1:
         return _fail(f"P3 worker anchor count={s.count(P3_ANCHOR)}")
     s = s.replace(P3_ANCHOR, P3_FN + P3_ANCHOR, 1)
+    _mark(P3_SPAWN_OLD)
     if s.count(P3_SPAWN_OLD) != 1:
         return _fail(f"P3 spawn anchor count={s.count(P3_SPAWN_OLD)}")
     s = s.replace(P3_SPAWN_OLD, P3_SPAWN_NEW, 1)
+    _mark(P3_ID_OLD)
     if s.count(P3_ID_OLD) != 1:
         return _fail(f"P3 identity anchor count={s.count(P3_ID_OLD)}")
     s = s.replace(P3_ID_OLD, P3_ID_NEW, 1)
+    _mark(P3_CHARA_OLD)
     if s.count(P3_CHARA_OLD) != 1:
         return _fail(f"P3 chara anchor count={s.count(P3_CHARA_OLD)}")
     s = s.replace(P3_CHARA_OLD, P3_CHARA_NEW, 1)
 
     # ---- P5 ----
+    _mark(P5_TRAIN_OLD)
     if s.count(P5_TRAIN_OLD) != 1:
         return _fail(f"P5 train anchor count={s.count(P5_TRAIN_OLD)}")
     s = s.replace(P5_TRAIN_OLD, P5_TRAIN_NEW, 1)
+    _mark(P5_SEL_OLD)
     if s.count(P5_SEL_OLD) != 1:
         return _fail(f"P5 selector anchor count={s.count(P5_SEL_OLD)}")
     s = s.replace(P5_SEL_OLD, P5_SEL_NEW, 1)
 
     # ---- P6 ----
+    _mark(P6_ANCHOR)
     if s.count(P6_ANCHOR) != 1:
         return _fail(f"P6 push_loop anchor count={s.count(P6_ANCHOR)}")
     s = s.replace(P6_ANCHOR, P6_FN + P6_ANCHOR, 1)
+    _mark(P6_BOOT_OLD)
     if s.count(P6_BOOT_OLD) != 1:
         return _fail(f"P6 boot anchor count={s.count(P6_BOOT_OLD)}")
     s = s.replace(P6_BOOT_OLD, P6_BOOT_NEW, 1)
+    _mark(P6_LOOP_OLD)
     if s.count(P6_LOOP_OLD) != 1:
         return _fail(f"P6 loop anchor count={s.count(P6_LOOP_OLD)}")
     s = s.replace(P6_LOOP_OLD, P6_LOOP_NEW, 1)
 
     # ---- P7 ----
+    _mark(P7_GEN_ANCHOR)
     if s.count(P7_GEN_ANCHOR) != 1:
         return _fail(f"P7 MT_W anchor count={s.count(P7_GEN_ANCHOR)}")
     s = s.replace(P7_GEN_ANCHOR, P7_GEN_DEF + P7_GEN_ANCHOR, 1)
+    _mark(P7_HOOK_OLD)
     if s.count(P7_HOOK_OLD) != 1:
         return _fail(f"P7 hook anchor count={s.count(P7_HOOK_OLD)}")
     s = s.replace(P7_HOOK_OLD, P7_HOOK_NEW, 1)
+    _mark(P7_OLD)
     if s.count(P7_OLD) != 1:
         return _fail(f"P7 weight anchor count={s.count(P7_OLD)}")
     s = s.replace(P7_OLD, P7_NEW, 1)
@@ -698,6 +735,8 @@ def patch_lib() -> int:
 def patch_bridge() -> int:
     s = open(PATH_BRIDGE, encoding="utf-8").read()
     before = len(s)
+    _CUR["src"] = s
+    _CUR["file"] = PATH_BRIDGE
 
     for old, new, tag in (
         (P4_ROOT_OLD, P4_ROOT_NEW, "P4 DATA_ROOT"),
@@ -705,6 +744,7 @@ def patch_bridge() -> int:
         (P4_ASSETS_OLD, P4_ASSETS_NEW, "P4 ensure_assets/ensure_data"),
         (P4_STATUS_OLD, P4_STATUS_NEW, "P4 status_json data_init"),
     ):
+        _mark(old)
         if s.count(old) != 1:
             return _fail(f"{tag} anchor count={s.count(old)}")
         s = s.replace(old, new, 1)
@@ -739,6 +779,7 @@ def main() -> int:
         "MT_GEN",
         'find_method_entry(class, "SelectTraining", 1)',
     ):
+        _mark(None)
         hits = sum(1 for line in lib.splitlines() if needle in line)
         print(f"  lib · {needle}: {hits}")
         if hits == 0:
