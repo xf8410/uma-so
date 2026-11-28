@@ -1,7 +1,7 @@
 # CI 最近一次失败日志
 
-- run: 46110706229
-- sha: 9eb276bb2fba1f5ccaef3b0d61642abcb1137a51
+- run: 46111031860
+- sha: 126507e9449821ef16a0e3a426b4e750f248e8f3
 
 ## 大小
 ```
@@ -14,7 +14,6 @@
 ```
 ## patch 尾部
 ```
-  fn mt_read_identity: 1 line(s)
   fn mt_deck_json: 1 line(s)
   mt_read_identity(): 3 line(s)
   /api/ai/deck: 2 line(s)
@@ -42,7 +41,7 @@ patched src/lib.rs: 1055879 -> 1057226 bytes
   MT_LAST_HIT: 3 line(s)
   idle: 14 line(s)
   chara_class_mismatch: 3 line(s)
-ci_patch12_pre: patched ci_patch12.py (regex/threshold)
+ci_patch12_pre: patched ci_patch12.py
   P2 sigsetjmp call sites: 10
 patched src/lib.rs: 1057226 -> 1064177 bytes
 patched src/matsuri_bridge.rs: 10987 -> 12007 bytes
@@ -62,6 +61,7 @@ patched src/matsuri_bridge.rs: 10987 -> 12007 bytes
   bridge · static DATA_INIT: Mutex<bool>: 1
   bridge · fn ensure_assets: 1
   bridge · fn ensure_data: 1
-  keep · handle_frame: 0
-::error::ci_patch12: verify 字面量 handle_frame 丢了
+  keep · handle_frame: 2
+  keep · 候选动作为空: 0
+::error::ci_patch12: verify 字面量 候选动作为空 丢了
 ```
