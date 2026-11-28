@@ -61,7 +61,7 @@ jobs:
         run: |
           for p in ci_patch.py ci_patch2.py ci_patch3.py ci_patch4.py ci_patch5.py \
                    ci_patch6.py ci_patch7.py ci_patch8.py ci_patch9.py ci_patch10.py \
-                   ci_patch11.py ci_patch12_pre.py ci_patch12.py; do
+                   ci_patch11.py ci_patch12_pre.py ci_patch12.py ci_patch12b.py; do
             echo "--- $p"
             python3 "$p" 2>&1 | tee -a /tmp/patch.log
             test "${PIPESTATUS[0]}" -eq 0 || { echo "::error::patch failed: $p"; exit 1; }
@@ -74,7 +74,8 @@ jobs:
                    "fn read_inline_obscured_int_array" "fn mt_thread_attach" \
                    "fn push_read_enabled" "has_act_candidates" \
                    "fn mt_deck_raw_json" "fn mt_start_worker" "matsuri-worker" \
-                   "dataset_missing" "MT_LAST_HIT" "chara_class_mismatch"; do
+                   "dataset_missing" "MT_LAST_HIT" "chara_class_mismatch" \
+                   "install_recoverable_sigaction" "restore_and_reraise" "has_train_candidates"; do
             c=$(grep -c "$k" src/lib.rs)
             echo "  $k: $c"
             test "$c" -ge 1 || { echo "::error::missing $k"; exit 1; }
@@ -110,7 +111,7 @@ jobs:
           done
           for k in handle_frame 候选动作为空 帧解析失败 守门 matsuri-worker \
                    dataset_missing chara_class_mismatch il2cpp_thread_attach \
-                   push_read.txt uma_so/matsuri_data; do
+                   push_read.txt uma_so/matsuri_data core\ hooks\ ready; do
             grep -aq "$k" "$SO" || { echo "::error::决策链/门禁被裁: $k"; exit 1; }
             echo "ok: $k"
           done
