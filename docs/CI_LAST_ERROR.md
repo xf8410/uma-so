@@ -1,29 +1,84 @@
 # CI 最近一次失败日志
 
-- run: 46111031860
-- sha: 126507e9449821ef16a0e3a426b4e750f248e8f3
+- run: 46111276567
+- sha: d10f83318be64abe8917e11bab1fdc4c3b3d75ef
 
 ## 大小
 ```
 ```
 ## cargo error
 ```
+285:error[E0428]: the name `read_obscured_int_array` is defined multiple times
+325:error[E0061]: this function takes 1 argument but 3 arguments were supplied
+349:error[E0061]: this function takes 1 argument but 3 arguments were supplied
+373:error[E0061]: this function takes 1 argument but 3 arguments were supplied
+580:error: could not compile `hachimi_ura` (lib) due to 4 previous errors; 25 warnings emitted
 ```
 ## cargo 尾部
 ```
+14829 |     unsafe {
+      |     ------ because it's nested under this `unsafe` block
+...
+15064 |                     unsafe {
+      |                     ^^^^^^ unnecessary `unsafe` block
+
+warning: variable does not need to be mutable
+     --> src/lib.rs:15732:9
+      |
+15732 |     let mut dream_overflow = false;
+      |         ----^^^^^^^^^^^^^^
+      |         |
+      |         help: remove this `mut`
+
+warning: value assigned to `min_level` is never read
+     --> src/lib.rs:15908:9
+      |
+15908 |         min_level = 0;
+      |         ^^^^^^^^^^^^^
+      |
+      = help: maybe it is overwritten before being read?
+      = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: variable does not need to be mutable
+     --> src/lib.rs:18432:20
+      |
+18432 |                 Ok(mut stmt) => stmt.column_names().iter().map(|s| s.to_string()).collect(),
+      |                    ----^^^^
+      |                    |
+      |                    help: remove this `mut`
+
+warning: value assigned to `all_events_count` is never read
+     --> src/lib.rs:23404:37
+      |
+23404 |       let mut all_events_count: i32 = 0;
+      |                                       ^ this value is reassigned later and never used
+...
+23443 | /             all_events_count = conn
+23444 | |                 .query_row("SELECT COUNT(*) FROM single_mode_story_data", [], |r| {
+23445 | |                     r.get(0)
+23446 | |                 })
+23447 | |                 .unwrap_or(0);
+      | |_____________________________- `all_events_count` is overwritten here before the previous value is read
+
+warning: unused variable: `ds_class`
+     --> src/lib.rs:23935:9
+      |
+23935 |     let ds_class = get_class_from_object(ds_obj);
+      |         ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ds_class`
+
+warning: unused variable: `is_literal`
+     --> src/lib.rs:24957:13
+      |
+24957 |         let is_literal = match field_get_flags {
+      |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_is_literal`
+
+Some errors have detailed explanations: E0061, E0428.
+For more information about an error, try `rustc --explain E0061`.
+warning: `hachimi_ura` (lib) generated 25 warnings
+error: could not compile `hachimi_ura` (lib) due to 4 previous errors; 25 warnings emitted
 ```
 ## patch 尾部
 ```
-  fn mt_deck_json: 1 line(s)
-  mt_read_identity(): 3 line(s)
-  /api/ai/deck: 2 line(s)
-patched src/lib.rs: 1049495 -> 1053298 bytes
-  fn mt_deck_raw_json: 1 line(s)
-  as_value_inline128: 1 line(s)
-  as_ref_ptr: 1 line(s)
-  /api/ai/deckraw: 2 line(s)
-patched src/lib.rs: 1053298 -> 1053429 bytes
-  read_obscured_int_at(e, 16): 6 line(s)
   read_obscured_int_at(e, 36): 7 line(s)
   read_obscured_int_at(e, 56): 4 line(s)
   seq_item(arr, i): 2 line(s)
@@ -63,5 +118,15 @@ patched src/matsuri_bridge.rs: 10987 -> 12007 bytes
   bridge · fn ensure_data: 1
   keep · handle_frame: 2
   keep · 候选动作为空: 0
-::error::ci_patch12: verify 字面量 候选动作为空 丢了
+::warning::源码里没有 候选动作为空（由 verify 扫 .so 兜底）
+  keep · 帧解析失败: 0
+::warning::源码里没有 帧解析失败（由 verify 扫 .so 兜底）
+  keep · 守门: 1
+  keep · matsuri-worker: 2
+  keep · dataset_missing: 2
+  keep · chara_class_mismatch: 3
+  keep · weight_override.txt: 2
+  keep · find_method_entry: 6
+  keep · trampoline_miss: 2
+ci_patch12: all anchors ok
 ```
