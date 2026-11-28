@@ -1,4 +1,9 @@
 name: sync-upstream
+# 把 delightedMaster/uma-so（朋友维护的主线）镜像回本仓。
+#
+# 注意：GITHUB_TOKEN **不能**改 `.github/workflows/*`（GitHub 硬限制，需要 PAT 的
+# workflow scope），所以这里只镜像 `hachimi_ura_plugin/`、`docs/` 与几个顶层文件；
+# build-so.yml 已按上游内容手工对齐（ci_patch12..19 + patch_gamedata + 上游判据）。
 on:
   workflow_dispatch:
   push:
@@ -18,26 +23,23 @@ jobs:
         run: |
           set -e
           git clone --depth 1 https://github.com/delightedMaster/uma-so.git /tmp/up
-          ls /tmp/up
+          echo "upstream head: $(git -C /tmp/up rev-parse --short HEAD)"
           ls /tmp/up/hachimi_ura_plugin | head -40
-      - name: mirror plugin tree
+      - name: mirror plugin tree + docs
         run: |
           set -e
-          # 插件目录整体替换（含 src/、全部 ci_patch*.py、gamedata patch 数据、Cargo.toml）
+          # 插件目录整体替换（src/、全部 ci_patch*.py、gamedata patch 数据、Cargo.toml）
           rm -rf hachimi_ura_plugin
           cp -a /tmp/up/hachimi_ura_plugin hachimi_ura_plugin
           # 顶层基线与文档
           cp -a /tmp/up/README.md README.md
           cp -a /tmp/up/hlpatch_endpoints.txt hlpatch_endpoints.txt
           cp -a /tmp/up/rust-toolchain.toml rust-toolchain.toml
-          rm -rf docs && cp -a /tmp/up/docs docs
-          # workflow 只同步上游的构建流程（本文件自身不覆盖）
-          for f in /tmp/up/.github/workflows/*.yml; do
-            b=$(basename "$f")
-            [ "$b" = "sync-upstream.yml" ] && continue
-            cp -a "$f" ".github/workflows/$b"
-          done
-          git status --short | head -40
+          rm -rf docs
+          cp -a /tmp/up/docs docs
+          rm -rf tools
+          cp -a /tmp/up/tools tools 2>/dev/null || true
+          git status --short | head -60
       - name: commit and push
         run: |
           set -e
@@ -48,5 +50,5 @@ jobs:
             echo "already in sync"
             exit 0
           fi
-          git commit -m "chore: 同步 delightedMaster/uma-so（ci_patch12–18 + gamedata patch + 文档）"
+          git commit -m "chore: 同步 delightedMaster/uma-so（ci_patch12–19 + gamedata patch + docs）"
           git push
