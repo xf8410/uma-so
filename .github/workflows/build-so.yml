@@ -69,7 +69,7 @@ jobs:
             python3 "$p" 2>&1 | tee -a /tmp/patch.log
             test "${PIPESTATUS[0]}" -eq 0 || { echo "::error::patch failed: $p"; exit 1; }
           done
-          echo "--- 锚点落地检查 ---"
+          echo "--- 锚点落地检查（注意：这是 grep 基本正则，避免 [ ] . * 等字符）---"
           for k in "mod matsuri_bridge" "fn build_matsuri_frame" "fn dump_omakase_tables" \
                    "fn get_base_weight_hook" "fn install_selector_hooks" \
                    "fn wb_override_lookup" "fn find_method_entry" \
@@ -87,7 +87,7 @@ jobs:
                    "story_try_choice_hook_handler" "build_live_story_json" \
                    "find_method_entry_exact" "fn install_bad_effect_filter_hook" \
                    "GetBadEffectConditionList" "fn install_filter_data_list_hook" \
-                   "GetFilterDataList" "next_w[b] = 100_000"; do
+                   "GetFilterDataList" "= 100_000;"; do
             c=$(grep -c "$k" src/lib.rs)
             echo "  $k: $c"
             test "$c" -ge 1 || { echo "::error::missing $k"; exit 1; }
